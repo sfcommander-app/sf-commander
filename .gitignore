@@ -1,0 +1,33 @@
+# Build
+/target/
+
+# Appka a jeji data: helper.toml (ulozene prihlaseni), logy, historie cechu.
+# Hotove exe patri do GitHub Releases, ne do gitu
+/app/
+*.exe
+*.log
+*.zhof
+
+# Web s aktualizacemi (RELEASE.bat) - je v nem .env.local s klici k Vercelu
+/release/
+
+# Archiv, zalohy, jednorazove build skripty
+/_archiv/
+/backups/
+/BUILD-*.bat
+*.url
+
+# Zdrojove obrazky k fontu (120 MB) - hotovy font je v assets/fonts
+/font/
+
+# Jen pro autora: nasazeni aktualizaci na Vercel a briefy pro AI
+# (cesty na disku, cech, server) - na verejny GitHub nepatri
+/RELEASE.bat
+/dokumentace/PROMPT-*.md
+
+# Na GitHub jen zdrojaky: zadne batky, poznamky ani changelogy
+*.bat
+/dokumentace/
+/ZMENY.md
+/UPDATE_LOG.md
+/publish-github.ps1
