@@ -7,6 +7,7 @@
 **SF Commander** is a free, open-source **Shakes & Fidget bot** and desktop helper for Windows. It plays your S&F characters for you: tavern expeditions, arena, city guard, dungeons, pets, fortress, underworld, Arena Manager and guild. It goes at a human pace, so every character gets the most out of every day without spamming the game server.
 <img width="1300" height="870" alt="screenshot-tavern" src="https://github.com/user-attachments/assets/2fd30bfd-0f9c-497e-a53f-cc8832f53946" />
 `Rust` · `Windows` · `English & Czech UI` · `multiple characters` · `S&F account, Steam & Google login`
+<img width="1300" height="870" alt="screenshot-tavern" src="https://github.com/user-attachments/assets/e5d68e4f-7843-40db-9850-f0b4602a2d27" />
 
 ---
 
