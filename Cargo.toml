@@ -1,0 +1,113 @@
+﻿[package]
+name = "sf-commander"
+version = "6.2.10"
+edition = "2024"
+
+# Two binaries. The app, and the author's licence desk - which is behind a
+# feature that is off, so `cargo build --release` produces the app and
+# nothing else and the desk cannot be shipped to the guild by accident:
+#     cargo run --features licence-tool --bin sfc-licence -- keygen key.pk8
+[[bin]]
+name = "sf-commander"
+path = "src/main.rs"
+
+[[bin]]
+name = "sfc-licence"
+path = "src/bin/sfc-licence.rs"
+required-features = ["licence-tool"]
+
+[features]
+default = []
+licence-tool = []
+
+[dependencies]
+ahash = "0.8"
+base64 = "0.22"
+async-compression = { version = "0.4", features = ["zlib"] }
+chrono = "0.4"
+clap = { version = "4.6.0", features = ["derive"] }
+clap-num = "1.2.0"
+fastrand = "2.4"
+# Ed25519 for the licence. Already in the tree under rustls, so this costs
+# nothing to build
+ring = "0.17"
+iced = { version = "0.12", default-features = false, features = [
+    "tokio",
+    "lazy",
+    "image",
+    "advanced",
+] }
+iced_aw = { version = "0.9", default-features = false, features = [
+    "number_input",
+    "icons",
+    "drop_down",
+    "modal",
+    "card",
+    "wrap",
+] }
+image = { version = "0.25", default-features = false, features = [
+    "ico",
+    "webp",
+] }
+indicatif = "0.17.11"
+log = "0.4.29"
+log4rs = { version = "1.4.0" }
+nohash-hasher = "0.2"
+num-bigint = "0.4"
+num-traits = "0.2"
+sha2 = "0.10"
+num-format = "0.4.4"
+open = "5.3"
+reqwest = { version = "0.13", features = ["gzip", "deflate"] }
+# Only wav is decoded - the two sounds are baked into the exe, so there is
+# no reason to carry mp3/vorbis/flac decoders around as well
+rodio = { version = "0.21", default-features = false, features = [
+    "playback",
+    "wav",
+] }
+semver = "1.0.28"
+serde = "1.0"
+serde_json = "1.0"
+sf-api = "0.4.4"
+titlecase = "3.6"
+tokio = { version = "1.51", default-features = false, features = ["fs"] }
+toml = "1.1"
+
+# sf-api 0.4.4 as published, plus one additive change: `Session::export()` /
+# `Session::restore()` (and the same for the SSO account), so that a running
+# login - Steam and Google included - can be handed to the next version of
+# this program instead of being thrown away on every update. See
+# LIVE_UPDATE.md. Nothing else in the crate is touched, so a newer upstream
+# release can replace the folder once it carries something equivalent
+[patch.crates-io]
+sf-api = { path = "vendor/sf-api" }
+
+[profile.release]
+strip = true
+lto = true
+opt-level = 3
+codegen-units = 1
+panic = "abort"
+
+# The middle gear, for NAHLED.bat. Release optimisation with the two
+# settings that cost the most compile time turned down: thin LTO instead of
+# LTO over the whole program, and sixteen code generation units instead of
+# one. The binary is a few per cent slower than a real release, which for a
+# window that spends its life waiting on a game server is nothing - and it
+# builds in a fraction of the time
+[profile.fast]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+
+[profile.dev]
+opt-level = 1
+
+# Async decompression and iced can become very slow on low opt-levels.
+# This adds a bit of compile overhead, but that time gets easily recouped
+# from the async decomp, etc speedups
+[profile.dev.package."*"]
+opt-level = 2
+
+[build-dependencies]
+winres = "0.1"
