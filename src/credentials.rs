@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::{AccountConfig, Config};
 
+#[cfg(not(test))]
 const SERVICE: &str = "SF Commander";
 
 fn target(kind: &str, name: &str, server: Option<&str>) -> String {
@@ -76,8 +77,8 @@ fn load(target: &str) -> Result<Option<String>, String> {
 }
 
 #[cfg(test)]
-fn vault()
--> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
+fn vault(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
     static VAULT: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<String, String>>,
     > = std::sync::OnceLock::new();

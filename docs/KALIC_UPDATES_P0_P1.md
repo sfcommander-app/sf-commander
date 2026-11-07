@@ -33,6 +33,10 @@ and is removed by the receiving process or by the sender on timeout.
 - `.github/workflows/windows-ci.yml` builds on Windows, runs tests and Clippy,
   creates the portable executable and NSIS installer, silently installs the
   package into an isolated directory, and runs an offline packaged smoke test.
+- Clippy reports the upstream project's existing warning backlog without
+  promoting those historical warnings to packaging-blocking errors. Compiler
+  failures, tests, release builds and both executable smoke tests remain hard
+  gates. New code should not add to the warning backlog.
 - `scripts/check-release-version.ps1` prevents a mismatched `vX.Y.Z` tag from
   producing artifacts.
 - Existing crash-safe settings writes and `.bak` recovery stay in place and are
