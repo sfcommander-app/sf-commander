@@ -68,6 +68,8 @@
 - Automatic updates
 - Offline preview mode with sample data
 - Crash-safe saving of settings (`helper.toml` with backup)
+- Master Kill Switch, durable write-action audit and CSV export
+- Remembered login hashes in Windows Credential Manager, not in the settings file
 
 ## Download & install
 
@@ -76,7 +78,18 @@ Get the latest release from **[Releases](../../releases)**:
 - **`SF-Commander-Setup-x.y.z.exe`** is the installer. It needs no admin rights and installs into `%LOCALAPPDATA%\Programs\SF Commander`. It adds a Start menu entry and an optional desktop shortcut, and you can uninstall it from Windows *Apps*.
 - **`SF-Commander-x.y.z.exe`** is the same app as a single portable file. Put it in any folder and run it.
 
-Updates install themselves. Settings are kept next to the app in `helper.toml`. **Never share that file**, because it holds your login.
+Updates install themselves. Non-secret settings are kept next to the app in
+`helper.toml`. Remembered password hashes are stored in Windows Credential
+Manager. On the first start after this update, a legacy hash is migrated before
+`helper.toml` is rewritten without it. The short-lived update handover file can
+contain live session material and is deleted immediately after the new process
+reads it; never copy or share handover files.
+
+The application starts with the **Master Kill Switch active**. Read-only views
+remain available, but no game-changing command is sent until you explicitly
+press **Enable writes**. If a write loses its connection before the result can
+be verified, the Kill Switch activates again and the command is not
+automatically replayed.
 
 The app is not code-signed, so Windows SmartScreen may show *"Windows protected your PC"*. Click **More info → Run anyway**.
 

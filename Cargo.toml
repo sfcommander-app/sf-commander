@@ -1,6 +1,6 @@
 ﻿[package]
 name = "sf-commander"
-version = "6.2.10"
+version = "6.2.11"
 edition = "2024"
 
 # Two binaries. The app, and the author's licence desk - which is behind a
@@ -50,6 +50,7 @@ image = { version = "0.25", default-features = false, features = [
     "webp",
 ] }
 indicatif = "0.17.11"
+keyring = { version = "4.2", default-features = false, features = ["v1"] }
 log = "0.4.29"
 log4rs = { version = "1.4.0" }
 nohash-hasher = "0.2"

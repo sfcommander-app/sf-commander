@@ -1,0 +1,75 @@
+name: Windows CI and package smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, kalic-updates]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, pinned 2026-11-01
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Verify release tag matches Cargo version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: ./scripts/check-release-version.ps1 -Tag '${{ github.ref_name }}'
+
+      - name: Unit tests
+        run: cargo test --locked --all-targets
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Release build
+        run: cargo build --locked --release
+      - name: Offline executable smoke test
+        run: ./target/release/sf-commander.exe --smoke-test
+
+      - name: Ensure NSIS is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis.exe -ErrorAction SilentlyContinue)) {
+            choco install nsis --yes --no-progress
+          }
+      - name: Build launcher and installer
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force dist | Out-Null
+          makensis.exe "/DOUT=$pwd\dist\SF Commander.exe" "/DICON=$pwd\assets\icon.ico" installer/launcher.nsi
+          makensis.exe "/DVERSION=$version" "/DVIVERSION=$version.0" "/DAPP_EXE=$pwd\target\release\sf-commander.exe" "/DLAUNCHER=$pwd\dist\SF Commander.exe" "/DICON=$pwd\assets\icon.ico" "/DOUT=$pwd\dist\SF-Commander-Setup-$version.exe" installer/sf-commander.nsi
+
+      - name: Silent-install package smoke test
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          $root = Join-Path $env:RUNNER_TEMP 'sf-commander-smoke'
+          $installer = Resolve-Path "dist/SF-Commander-Setup-$version.exe"
+          Start-Process -FilePath $installer -ArgumentList '/S', "/D=$root" -Wait
+          $app = Join-Path $root "SF-Commander-$version.exe"
+          if (-not (Test-Path -LiteralPath $app)) { throw "Packaged app missing: $app" }
+          $process = Start-Process -FilePath $app -ArgumentList '--smoke-test' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Packaged smoke test exited $($process.ExitCode)" }
+
+      - name: Upload tagged or manually requested installer
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/kalic-updates'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sf-commander-windows
+          path: dist/SF-Commander-Setup-*.exe
+          if-no-files-found: error
+          retention-days: 7

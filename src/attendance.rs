@@ -1,13 +1,9 @@
-//! How often the character actually turns up - and the misses that keep
-//! it from being every single time.
+//! Local guild-duty scheduling record.
 //!
-//! A bot signs every attack, every defense, swings at the portal every
-//! day: a 100 % record over weeks, which no person has. This diary keeps
-//! the record per character on disk (`attendance.json` next to the exe)
-//! and hands out deliberate misses so the share settles just under the
-//! target the safety slider sets (see `stealth::attend_target`). The
-//! decision for one battle or one portal day is made once and remembered,
-//! so a second look does not sign up what the first look skipped.
+//! This is not authoritative combat attendance: only observed system-mail
+//! evidence can prove who actually participated. The diary prevents duplicate
+//! scheduling for the same battle/day, but never deliberately skips an enabled
+//! duty. Mail evidence remains unknown until real sanitized fixtures exist.
 
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -137,7 +133,7 @@ impl Attendance {
         key: &str,
         duty: Duty,
         when: i64,
-        target: f64,
+        _target: f64,
     ) -> bool {
         let rec = self.chars.entry(key.to_string()).or_default();
         let existing = match duty {
@@ -148,8 +144,7 @@ impl Attendance {
         if let Some(went) = existing {
             return went;
         }
-        let (went_n, seen) = rec.tally(duty);
-        let go = !crate::stealth::skip_duty(went_n, seen, target);
+        let go = true;
         match duty {
             Duty::Portal => {
                 rec.portal.insert(day_of(when), go);
@@ -178,11 +173,10 @@ fn day_of(ts: i64) -> NaiveDate {
 mod tests {
     use super::*;
 
-    /// A decision is made once per battle and kept; with a target of one
-    /// nobody is ever skipped; with a target well under the record the
-    /// misses come
+    /// A decision is made once per battle and kept. Enabled guild duties are
+    /// never deliberately skipped, regardless of the old pacing target.
     #[test]
-    fn decisions_are_remembered_and_follow_the_target() {
+    fn decisions_are_remembered_without_manufactured_absences() {
         let mut a = Attendance::default();
         a.chars.clear();
         for i in 0..20 {
@@ -192,22 +186,24 @@ mod tests {
         // Asked again about the same battle: the same answer, no new entry
         assert!(a.decide_in_memory("k", Duty::Attack, 1_800_000_000, 0.0));
         assert_eq!(a.record("k").tally(Duty::Attack), (20, 20));
-        // A record at 100 % and a target of 80 %: the next few go missing
-        let mut skipped = 0;
+        // The old stealth target is compatibility input only. It may not
+        // manufacture absences.
         for i in 20..40 {
-            if !a.decide_in_memory("k", Duty::Attack, 1_800_000_000 + i * 3600, 0.8) {
-                skipped += 1;
-            }
+            assert!(a.decide_in_memory(
+                "k",
+                Duty::Attack,
+                1_800_000_000 + i * 3600,
+                0.0,
+            ));
         }
-        assert!(skipped >= 2, "skipped {skipped}");
         let (went, seen) = a.record("k").tally(Duty::Attack);
         assert_eq!(seen, WINDOW);
-        assert!(went < seen);
+        assert_eq!(went, seen);
     }
 
     impl Attendance {
         /// `decide` without the disk
-        fn decide_in_memory(&mut self, key: &str, duty: Duty, when: i64, target: f64) -> bool {
+        fn decide_in_memory(&mut self, key: &str, duty: Duty, when: i64, _target: f64) -> bool {
             let rec = self.chars.entry(key.to_string()).or_default();
             let existing = match duty {
                 Duty::Portal => rec.portal.get(&day_of(when)).copied(),
@@ -217,8 +213,7 @@ mod tests {
             if let Some(went) = existing {
                 return went;
             }
-            let (went_n, seen) = rec.tally(duty);
-            let go = !crate::stealth::skip_duty(went_n, seen, target);
+            let go = true;
             match duty {
                 Duty::Portal => {
                     rec.portal.insert(day_of(when), go);

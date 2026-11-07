@@ -768,6 +768,7 @@ mod tests {
             replaced: None,
             handover: None,
             preview: true,
+            smoke_test: false,
         });
         assert_eq!(helper.subscription().into_recipes().len(), 1); // Window resize only; no game timers.
         assert!(

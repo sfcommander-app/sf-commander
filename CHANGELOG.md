@@ -1,5 +1,15 @@
 # Changelog
 
+## 6.2.11 — kalic-updates
+- Master Kill Switch starts active and gates every command that can change game state
+- Central write executor records started, blocked, verified failure, inconclusive and verified success outcomes
+- Ambiguous write/connection failures activate the Kill Switch instead of being replayed automatically
+- Remembered password hashes migrate out of `helper.toml` into Windows Credential Manager
+- Durable, redacted action journal with CSV export from the Activity panel
+- Windows CI now tests, lints, builds, packages, installs and smoke-tests the application
+- Release tags must match the Cargo package version before artifacts can be produced
+- Enabled guild duties are no longer deliberately skipped; authoritative attendance from system mail remains unknown until confirmed fixtures are available
+
 ## 6.2.10
 - Guild overview: rows aligned
 - Guild legend: treasury / instructor / knights

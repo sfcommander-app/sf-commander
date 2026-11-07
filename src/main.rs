@@ -7,6 +7,7 @@ mod backup;
 mod chat;
 mod companions;
 mod config;
+mod credentials;
 mod crawler;
 mod dungeon;
 mod expedition;
@@ -31,6 +32,7 @@ mod preview;
 mod probe_history;
 mod quest;
 mod server;
+mod safety;
 mod shopping;
 mod smith;
 mod sound;
@@ -123,6 +125,9 @@ struct Args {
     /// Open an offline, read-only preview with sample character data
     #[arg(long)]
     pub preview: bool,
+    /// Offline packaged-build health check used by Windows CI
+    #[arg(long, hide = true)]
+    pub smoke_test: bool,
 }
 
 #[derive(Debug, Subcommand, Clone)]
@@ -161,6 +166,14 @@ impl Args {
 
 fn main() -> iced::Result {
     let args = Args::parse();
+
+    if args.smoke_test {
+        if let Err(error) = packaged_smoke_test() {
+            eprintln!("SF Commander smoke test failed: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     let is_headless = args.is_headless();
     let config = get_log_config(is_headless);
@@ -216,6 +229,20 @@ fn main() -> iced::Result {
         settings.window.icon = icon;
     }
     Helper::run(settings)
+}
+
+fn packaged_smoke_test() -> Result<(), String> {
+    if !crate::safety::killed() {
+        return Err("master Kill Switch did not start active".to_string());
+    }
+    let serialized = toml::to_string(&Config::default())
+        .map_err(|error| format!("default config cannot serialize: {error}"))?;
+    let _: Config = toml::from_str(&serialized)
+        .map_err(|error| format!("default config cannot round-trip: {error}"))?;
+    if serialized.contains("pw_hash") {
+        return Err("helper.toml would contain a password hash".to_string());
+    }
+    Ok(())
 }
 
 struct Helper {
@@ -735,7 +762,9 @@ impl Application for Helper {
             next_send_at: None,
             last_sweep: None,
             global_gap: 2,
-            paused: false,
+            // Fail closed. The player must explicitly release the master
+            // Kill Switch before any game write is allowed.
+            paused: true,
             licence: crate::licence::Status::Missing,
             console: std::collections::VecDeque::new(),
             successes: std::collections::VecDeque::new(),

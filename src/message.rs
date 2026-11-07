@@ -244,6 +244,27 @@ pub enum SimpleNote {
 }
 
 impl SimpleNote {
+    /// Conservative classification for the central write boundary. A screen
+    /// refresh may continue to use the ordinary read path; everything that
+    /// can spend, fight, join, send, collect or change server-side state is a
+    /// write. Unknown/new variants therefore need an explicit decision here.
+    #[must_use]
+    pub fn mutates_game_state(&self) -> bool {
+        !matches!(
+            self,
+            SimpleNote::DungeonsUpdated
+                | SimpleNote::FortressScout { .. }
+                | SimpleNote::Guild
+                | SimpleNote::GuildChat
+                | SimpleNote::Mail
+                | SimpleNote::ArenaOffer { .. }
+                | SimpleNote::GuildFinder
+                | SimpleNote::GuildFinderLook(_)
+                | SimpleNote::GuildJoinLook(_)
+                | SimpleNote::GuildLookup { .. }
+        )
+    }
+
     /// What to put in the live console. The console used to print `{:?}` of
     /// this enum, cut off at seventy characters - so it read
     /// `PetFed { pet: "Water pet #81 (lvl 16, 2/3 today, 2 fruit lef` and
@@ -690,6 +711,7 @@ pub enum Message {
     SaveSettings,
     ToggleConsole,
     ClearConsole,
+    ExportActionAudit,
     /// Empties the successes window
     ClearSuccesses,
     /// Put a job at an absolute place (0-based) in the queue order
@@ -1025,6 +1047,12 @@ pub enum Message {
         session: Box<Session>,
         note: SimpleNote,
         error: String,
+    },
+    /// A mutating request was stopped locally before it reached the game.
+    WriteBlocked {
+        ident: AccountIdent,
+        session: Box<Session>,
+        action: String,
     },
     ConfigSetAutoFortress {
         name: String,
@@ -2904,7 +2932,14 @@ impl Helper {
                             name: tn,
                             use_mushroom: use_mush,
                         };
-                        let resp = session.send_command(&cmd).await;
+                        let resp = crate::safety::execute_write(
+                            &mut session,
+                            &cmd,
+                            &ident.to_string(),
+                            "Arena fight",
+                            crate::safety::Source::Automation,
+                        )
+                        .await;
                         (resp, session)
                     },
                     move |r| match r.0 {
@@ -2914,6 +2949,15 @@ impl Helper {
                             against: target,
                             resp: Box::new(resp),
                         },
+                        Err(ref error)
+                            if crate::safety::is_blocked_error(error) =>
+                        {
+                            Message::WriteBlocked {
+                                ident,
+                                session: r.1,
+                                action: "Arena fight".to_string(),
+                            }
+                        }
                         Err(_) => Message::PlayerCommandFailed {
                             ident,
                             session: r.1,
@@ -2929,6 +2973,13 @@ impl Helper {
                 mut session,
                 attempt,
             } => {
+                // A mutating request with an ambiguous transport result
+                // activates the process-wide safety boundary. Mirror it in
+                // the UI state before considering the ordinary reconnect
+                // path, so the write cannot be replayed after a relog.
+                if crate::safety::killed() {
+                    self.paused = true;
+                }
                 let Some(server) = self.servers.0.get_mut(&ident.server_id)
                 else {
                     return Command::none();
@@ -3039,6 +3090,8 @@ impl Helper {
                     // it would *probably* be ok to just ignore this in most
                     // cases, but whatever
                     *lock = AccountStatus::FatalError(e.to_string());
+                    crate::safety::set_killed(true);
+                    self.paused = true;
                     return Command::none();
                 };
 
@@ -3054,8 +3107,16 @@ impl Helper {
 
                 let Some(won) = won else {
                     warn!("Fight without a result for {ident}");
+                    crate::safety::set_killed(true);
+                    self.paused = true;
                     return Command::none();
                 };
+
+                crate::safety::verified_success(
+                    &ident.to_string(),
+                    "Arena fight",
+                    crate::safety::Source::Unspecified,
+                );
 
                 let nt = against.info.name.clone();
                 let ut = against.info.uid;
@@ -3546,7 +3607,14 @@ impl Helper {
                             name: tn,
                             use_mushroom: false,
                         };
-                        let resp = session.send_command(&cmd).await;
+                        let resp = crate::safety::execute_write(
+                            &mut session,
+                            &cmd,
+                            &ident.to_string(),
+                            "Arena fight",
+                            crate::safety::Source::Manual,
+                        )
+                        .await;
                         (resp, session)
                     },
                     move |r| match r.0 {
@@ -3556,6 +3624,15 @@ impl Helper {
                             against: target,
                             resp: Box::new(resp),
                         },
+                        Err(ref error)
+                            if crate::safety::is_blocked_error(error) =>
+                        {
+                            Message::WriteBlocked {
+                                ident,
+                                session: r.1,
+                                action: "Arena fight".to_string(),
+                            }
+                        }
                         Err(_) => Message::PlayerCommandFailed {
                             ident,
                             session: r.1,
@@ -3644,7 +3721,14 @@ impl Helper {
                             name: tn,
                             use_mushroom: false,
                         };
-                        let resp = session.send_command(&cmd).await;
+                        let resp = crate::safety::execute_write(
+                            &mut session,
+                            &cmd,
+                            &ident.to_string(),
+                            "Arena fight",
+                            crate::safety::Source::Manual,
+                        )
+                        .await;
                         (resp, session)
                     },
                     move |r| match r.0 {
@@ -3654,6 +3738,15 @@ impl Helper {
                             against: target,
                             resp: Box::new(resp),
                         },
+                        Err(ref error)
+                            if crate::safety::is_blocked_error(error) =>
+                        {
+                            Message::WriteBlocked {
+                                ident,
+                                session: r.1,
+                                action: "Arena fight".to_string(),
+                            }
+                        }
                         Err(_) => Message::PlayerCommandFailed {
                             ident,
                             session: r.1,
@@ -4286,6 +4379,7 @@ impl Helper {
             }
             Message::TogglePause => {
                 self.paused = !self.paused;
+                crate::safety::set_killed(self.paused);
                 if self.paused {
                     // Everything that was waiting for its turn goes away.
                     // Otherwise pressing RESUME after an evening of playing
@@ -4420,6 +4514,23 @@ impl Helper {
             Message::ClearConsole => {
                 self.console.clear();
             }
+            Message::ExportActionAudit => match crate::safety::export_csv() {
+                Ok(path) => {
+                    self.console(
+                        None,
+                        format!("Action audit exported to {}", path.display()),
+                        Some(true),
+                    );
+                    if let Some(parent) = path.parent() {
+                        _ = open::that(parent);
+                    }
+                }
+                Err(error) => self.console(
+                    None,
+                    format!("Could not export the action audit: {error}"),
+                    Some(false),
+                ),
+            },
             Message::ToggleFeedAll => {
                 self.feed_all = !self.feed_all;
             }
@@ -5300,7 +5411,18 @@ impl Helper {
                 };
                 if let Err(e) = gs.update(*resp) {
                     *lock = AccountStatus::FatalError(e.to_string());
+                    if note.mutates_game_state() {
+                        crate::safety::set_killed(true);
+                        self.paused = true;
+                    }
                     return Command::none();
+                }
+                if note.mutates_game_state() {
+                    crate::safety::verified_success(
+                        &ident.to_string(),
+                        &note.label(),
+                        crate::safety::Source::Unspecified,
+                    );
                 }
                 if matches!(note, SimpleNote::Mail) {
                     log::info!(
@@ -7358,6 +7480,20 @@ impl Helper {
                     _ => account.social.status = Some(error),
                 }
             }
+            Message::WriteBlocked {
+                ident,
+                session,
+                action,
+            } => {
+                self.console(
+                    Some(ident),
+                    format!("{action}: blocked by the master Kill Switch"),
+                    Some(false),
+                );
+                if let Some(account) = self.servers.get_account_mut(&ident) {
+                    account.status.lock_safe().put_session(session);
+                }
+            }
             Message::AutoFortress { ident, state } => {
                 let Some(account) = self.servers.get_account_mut(&ident) else {
                     return Command::none();
@@ -8640,11 +8776,6 @@ impl Helper {
                 resp,
                 action,
             } => {
-                self.console(
-                    Some(ident),
-                    format!("Fortress {action:?}"),
-                    Some(true),
-                );
                 let Some(account) = self.servers.get_account_mut(&ident) else {
                     return Command::none();
                 };
@@ -8666,10 +8797,24 @@ impl Helper {
                         [sf_api::gamestate::fortress::FortressUnitType::Soldier]
                         .count
                 });
+                let fortress_before = gs.fortress.as_ref().map(|f| {
+                    let unit = &f.units[
+                        sf_api::gamestate::fortress::FortressUnitType::Soldier
+                    ];
+                    (
+                        f.attack_target,
+                        f.attack_free_reroll,
+                        unit.count,
+                        unit.in_training,
+                    )
+                });
+                let silver_before = gs.character.silver;
                 let loot_before = fortress_stock(gs);
 
                 if let Err(e) = gs.update(*resp) {
                     *lock = AccountStatus::FatalError(e.to_string());
+                    crate::safety::set_killed(true);
+                    self.paused = true;
                     return Command::none();
                 }
 
@@ -8679,6 +8824,18 @@ impl Helper {
                         [sf_api::gamestate::fortress::FortressUnitType::Soldier]
                         .count
                 });
+                let fortress_after = gs.fortress.as_ref().map(|f| {
+                    let unit = &f.units[
+                        sf_api::gamestate::fortress::FortressUnitType::Soldier
+                    ];
+                    (
+                        f.attack_target,
+                        f.attack_free_reroll,
+                        unit.count,
+                        unit.in_training,
+                    )
+                });
+                let silver_after = gs.character.silver;
                 let loot_after = fortress_stock(gs);
                 // What the raid brought home. The stock can only grow from an
                 // attack, so a drop (a building started) is reported as zero
@@ -8694,10 +8851,48 @@ impl Helper {
                 let outcome = fought
                     .then(|| gs.last_fight.as_ref().map(|a| a.has_player_won))
                     .flatten();
+                let verified = match action {
+                    FortressActionKind::Attack => fought,
+                    FortressActionKind::Reroll
+                    | FortressActionKind::PaidReroll => {
+                        fortress_before
+                            .zip(fortress_after)
+                            .is_some_and(|(before, after)| {
+                                before.0 != after.0 || before.1 != after.1
+                            })
+                            || silver_after < silver_before
+                    }
+                    FortressActionKind::Train => fortress_before
+                        .zip(fortress_after)
+                        .is_some_and(|(before, after)| {
+                            before.2 != after.2 || before.3 != after.3
+                        }),
+                };
                 // The session always goes back, no matter what the response
                 // looked like
                 lock.put_session(session);
                 drop(lock);
+
+                let audit_action = match action {
+                    FortressActionKind::Attack => "Fortress attack",
+                    FortressActionKind::Reroll
+                    | FortressActionKind::PaidReroll => "Fortress reroll",
+                    FortressActionKind::Train => "Fortress soldier training",
+                };
+                if verified {
+                    crate::safety::verified_success(
+                        &ident.to_string(),
+                        audit_action,
+                        crate::safety::Source::Unspecified,
+                    );
+                } else {
+                    crate::safety::set_killed(true);
+                    self.paused = true;
+                    log::warn!(
+                        "{ident}: {audit_action} response could not be verified; \
+                         master Kill Switch activated"
+                    );
+                }
 
                 let mut train_next = false;
                 if let Some(fi) = &mut account.fortress_info {
@@ -8770,13 +8965,23 @@ impl Helper {
                         FortressActionKind::Reroll
                         | FortressActionKind::PaidReroll => fi.log.push((
                             Local::now(),
-                            "New opponent".to_string(),
-                            true,
+                            if verified {
+                                "New opponent".to_string()
+                            } else {
+                                "Reroll could not be verified - Kill Switch active"
+                                    .to_string()
+                            },
+                            verified,
                         )),
                         FortressActionKind::Train => fi.log.push((
                             Local::now(),
-                            "Soldier queued".to_string(),
-                            true,
+                            if verified {
+                                "Soldier queued".to_string()
+                            } else {
+                                "Recruiting could not be verified - Kill Switch active"
+                                    .to_string()
+                            },
+                            verified,
                         )),
                     }
                     // A run goes on by itself: the next opponent after the
@@ -8873,7 +9078,14 @@ impl Helper {
                         let cmd = sf_api::command::Command::UnderworldAttack {
                             player_id: tid,
                         };
-                        let resp = session.send_command(&cmd).await;
+                        let resp = crate::safety::execute_write(
+                            &mut session,
+                            &cmd,
+                            &ident.to_string(),
+                            "Underworld lure",
+                            crate::safety::Source::Manual,
+                        )
+                        .await;
                         (resp, session)
                     },
                     move |r| match r.0 {
@@ -8883,6 +9095,15 @@ impl Helper {
                             against: target,
                             resp: Box::new(resp),
                         },
+                        Err(ref error)
+                            if crate::safety::is_blocked_error(error) =>
+                        {
+                            Message::WriteBlocked {
+                                ident,
+                                session: r.1,
+                                action: "Underworld lure".to_string(),
+                            }
+                        }
                         Err(_) => Message::PlayerCommandFailed {
                             ident,
                             session: r.1,
@@ -8917,6 +9138,8 @@ impl Helper {
                     // it would *probably* be ok to just ignore this in most
                     // cases, but whatever
                     *lock = AccountStatus::FatalError(e.to_string());
+                    crate::safety::set_killed(true);
+                    self.paused = true;
                     return Command::none();
                 };
 
@@ -8932,7 +9155,15 @@ impl Helper {
                 };
 
                 if let Some(won) = won {
+                    crate::safety::verified_success(
+                        &ident.to_string(),
+                        "Underworld lure",
+                        crate::safety::Source::Unspecified,
+                    );
                     si.attack_log.push((Local::now(), against.name, won));
+                } else {
+                    crate::safety::set_killed(true);
+                    self.paused = true;
                 }
 
                 if let Some(underworld) = underworld {
@@ -9209,7 +9440,14 @@ impl Helper {
                         let cmd = sf_api::command::Command::UnderworldAttack {
                             player_id: target.uid,
                         };
-                        let resp = session.send_command(&cmd).await;
+                        let resp = crate::safety::execute_write(
+                            &mut session,
+                            &cmd,
+                            &ident.to_string(),
+                            "Underworld lure",
+                            crate::safety::Source::Automation,
+                        )
+                        .await;
                         (resp, session)
                     },
                     move |r| match r.0 {
@@ -9222,6 +9460,15 @@ impl Helper {
                             },
                             resp: Box::new(resp),
                         },
+                        Err(ref error)
+                            if crate::safety::is_blocked_error(error) =>
+                        {
+                            Message::WriteBlocked {
+                                ident,
+                                session: r.1,
+                                action: "Underworld lure".to_string(),
+                            }
+                        }
                         Err(_) => Message::PlayerCommandFailed {
                             ident,
                             session: r.1,
@@ -9529,12 +9776,26 @@ impl Helper {
         // milliseconds and carries the same words plus how it went - printing
         // both meant every single action appeared twice
 
+        let is_write = note.mutates_game_state();
+        let audit_action = note.label();
+        let audit_character = ident.to_string();
         Command::perform(
             async move {
                 if wait_ms > 0 {
                     sleep(Duration::from_millis(wait_ms as u64)).await;
                 }
-                let resp = session.send_command(&cmd).await;
+                let resp = if is_write {
+                    crate::safety::execute_write(
+                        &mut session,
+                        &cmd,
+                        &audit_character,
+                        &audit_action,
+                        crate::safety::Source::Unspecified,
+                    )
+                    .await
+                } else {
+                    session.send_command(&cmd).await
+                };
                 (resp, session)
             },
             move |r| match r.0 {
@@ -9544,6 +9805,13 @@ impl Helper {
                     resp: Box::new(resp),
                     note: note.clone(),
                 },
+                Err(ref error) if crate::safety::is_blocked_error(error) => {
+                    Message::WriteBlocked {
+                        ident,
+                        session: r.1,
+                        action: note.label(),
+                    }
+                }
                 Err(sf_api::error::SFError::ServerError(e)) => {
                     Message::SimpleFailed {
                         ident,
@@ -13997,8 +14265,8 @@ impl Helper {
     /// reason
     #[must_use]
     pub fn halt_reason(&self) -> Option<&'static str> {
-        if self.paused {
-            return Some("STOP");
+        if self.paused || crate::safety::killed() {
+            return Some("the master Kill Switch");
         }
         if !self.licence.may_run() {
             return Some("the licence");
@@ -15127,15 +15395,13 @@ impl Helper {
     fn guild_auto_sign(&mut self, ident: AccountIdent) -> Command<Message> {
         use sf_api::gamestate::guild::BattlesJoined;
 
-        // The attendance diary's key and the slider's targets, before the
-        // account is borrowed
+        // The attendance diary's key, before the account is borrowed.
         let server_url = self
             .servers
             .0
             .get(&ident.server_id)
             .map(|s| s.ident.url.clone())
             .unwrap_or_default();
-        let profile = self.profile();
         let Some(account) = self.servers.get_account_mut(&ident) else {
             return Command::none();
         };
@@ -15255,19 +15521,12 @@ impl Helper {
             }
         };
 
-        // Every duty goes through the attendance diary first: a miss now
-        // and then keeps the record under the 100 % no person has. The
-        // decision is made once per battle / portal day and remembered
+        // Every duty goes through the diary so the same battle/day is handled
+        // only once. It records local scheduling, never manufactures a miss.
         use crate::attendance::Duty;
-        let mut masked: Vec<&'static str> = Vec::new();
-        let mut attends =
+        let attends =
             |att: &mut crate::attendance::Attendance, duty: Duty, when: i64| {
-                let target = crate::stealth::attend_target(duty, &profile);
-                let go = att.decide(&att_key, duty, when, target);
-                if !go {
-                    masked.push(duty.label());
-                }
-                go
+                att.decide(&att_key, duty, when, 1.0)
             };
 
         let mut waiting: Vec<String> = Vec::new();
@@ -15325,19 +15584,6 @@ impl Helper {
                 ));
             }
         }
-        // A deliberate miss is said once, in the assistant's words - the
-        // decision is remembered, so this line does not repeat
-        for duty in masked {
-            let name = account.name.clone();
-            self.console.push_back(crate::ConsoleLine {
-                at: now,
-                who: titlecase::titlecase(&name),
-                text: format!("Masking: sitting out the {duty} on purpose - attendance kept under 100 %"),
-                ok: None,
-                dup: false,
-            });
-        }
-
         // Nothing to sign up for and nothing running: declare the raid.
         // Once it is declared the sign-up branch above joins it on the
         // next pass
@@ -15847,11 +16093,6 @@ impl Helper {
             && scouted.is_none()
             && target.is_some();
 
-        let free_reroll = fortress
-            .attack_free_reroll
-            .map(|a| a <= Local::now())
-            .unwrap_or(false);
-
         // Reasons to not even send the command
         let blocked = match action {
             FortressActionKind::Attack if all_soldiers == 0 => Some(
@@ -15896,18 +16137,6 @@ impl Helper {
             fi.scouted_soldiers = None;
         }
 
-        // A free new opponent before attacking. This used to be a checkbox,
-        // which never made sense: it costs nothing, and a fresh opponent is
-        // never worse than the one already standing there. `free_reroll` is
-        // what keeps it from ever spending silver or mushrooms
-        // Not in a raid run: there the opponent was just scouted and
-        // judged, and a new one would be attacked unseen. The run takes
-        // its new opponents through the skip ladder, on purpose
-        let reroll_first = action == FortressActionKind::Attack
-            && auto
-            && free_reroll
-            && !raiding;
-
         let Some(mut session) = status.take_session(action.busy_reason())
         else {
             drop(status);
@@ -15933,17 +16162,23 @@ impl Helper {
             });
         }
 
+        let audit_source = if auto {
+            crate::safety::Source::Automation
+        } else {
+            crate::safety::Source::Manual
+        };
+        let audit_character = ident.to_string();
+        let audit_action = match action {
+            FortressActionKind::Attack => "Fortress attack",
+            FortressActionKind::Reroll | FortressActionKind::PaidReroll => {
+                "Fortress reroll"
+            }
+            FortressActionKind::Train => "Fortress soldier training",
+        };
+
         Command::perform(
             async move {
                 use sf_api::command::Command as SFCommand;
-                if reroll_first {
-                    let reroll = SFCommand::FortressNewEnemy {
-                        use_mushroom: false,
-                    };
-                    // A refused re-roll is not worth aborting the attack for
-                    _ = session.send_command(&reroll).await;
-                    crate::pace::sleep_between(800, 2000).await;
-                }
                 let cmd = match action {
                     FortressActionKind::Attack => {
                         SFCommand::FortressAttack { soldiers }
@@ -15959,7 +16194,14 @@ impl Helper {
                         count: 1,
                     },
                 };
-                let resp = session.send_command(&cmd).await;
+                let resp = crate::safety::execute_write(
+                    &mut session,
+                    &cmd,
+                    &audit_character,
+                    audit_action,
+                    audit_source,
+                )
+                .await;
                 (resp, session)
             },
             move |r| match r.0 {
@@ -15972,6 +16214,13 @@ impl Helper {
                 // The server rejecting a command (no resources, cooldown, ...)
                 // leaves the session perfectly usable, so only real connection
                 // problems trigger a relog
+                Err(ref error) if crate::safety::is_blocked_error(error) => {
+                    Message::WriteBlocked {
+                        ident,
+                        session: r.1,
+                        action: audit_action.to_string(),
+                    }
+                }
                 Err(sf_api::error::SFError::ServerError(e)) => {
                     Message::FortressActionFailed {
                         ident,

@@ -747,6 +747,11 @@ impl Config {
                         until the recovery choice is made"
                 .into());
         }
+        // `PWHash` is replayable login material. Persist it in the OS vault
+        // before serializing a TOML that deliberately omits it. If the vault
+        // is unavailable the settings file is left untouched, so a transient
+        // Credential Manager failure cannot erase the last usable login.
+        crate::credentials::persist(self).map_err(std::io::Error::other)?;
         let str = toml::to_string_pretty(self)?;
         // Always next to the exe, so it survives every update
         crate::storage::write_atomic(&Self::path(), str.as_bytes())?;
@@ -784,14 +789,30 @@ impl Config {
             // The pre-1.6x working-directory copy, so nobody loses their
             // login on the update that moved the file beside the exe
             return match std::fs::read_to_string("helper.toml") {
-                Ok(text) => Self::parse(&text).map(|c| {
-                    Some((Self::migrate(c), crate::storage::Source::Main))
+                Ok(text) => Self::parse(&text).and_then(|mut c| {
+                    let legacy = crate::credentials::hydrate(&mut c)?;
+                    let c = Self::migrate(c);
+                    if legacy {
+                        // The first crash-safe write may preserve the legacy
+                        // source as `.bak`; the second replaces that backup
+                        // with the already sanitized main file.
+                        c.write().map_err(|e| e.to_string())?;
+                        c.write().map_err(|e| e.to_string())?;
+                        std::fs::remove_file("helper.toml")
+                            .map_err(|e| e.to_string())?;
+                    }
+                    Ok(Some((c, crate::storage::Source::Main)))
                 }),
                 Err(_) => Ok(None),
             };
         }
         let (config, source) =
             crate::storage::read_with_backup(&path, Self::parse)?;
+        let backup_had_legacy_credential = std::fs::read_to_string(&backup)
+            .is_ok_and(|text| {
+                text.lines()
+                    .any(|line| line.trim_start().starts_with("pw_hash"))
+            });
         if source == crate::storage::Source::Backup {
             // The main file is broken. Move it out of the way now: the
             // next save copies whatever sits at the main path over the
@@ -808,7 +829,19 @@ impl Config {
                 ),
             }
         }
-        Ok(Some((Self::migrate(config), source)))
+        let mut config = config;
+        let legacy = crate::credentials::hydrate(&mut config)?;
+        let config = Self::migrate(config);
+        if legacy || backup_had_legacy_credential {
+            // The first write creates a sanitized main while retaining the
+            // legacy source as the normal recovery backup. The second write
+            // replaces that backup with the sanitized main. If the process
+            // stops between them, the next restore detects the legacy hash in
+            // the backup and repeats this idempotent scrub.
+            config.write().map_err(|e| e.to_string())?;
+            config.write().map_err(|e| e.to_string())?;
+        }
+        Ok(Some((config, source)))
     }
 
     /// The one-off changes of defaults, each remembered by its flag
@@ -1132,13 +1165,19 @@ static WRITES_BLOCKED: std::sync::atomic::AtomicBool =
 pub enum AccountCreds {
     Regular {
         name: String,
+        #[serde(default = "empty_pw_hash", skip_serializing)]
         pw_hash: PWHash,
         server: String,
     },
     SF {
         name: String,
+        #[serde(default = "empty_pw_hash", skip_serializing)]
         pw_hash: PWHash,
     },
+}
+
+fn empty_pw_hash() -> PWHash {
+    PWHash::from_hash(String::new())
 }
 
 impl From<AccountConfig> for AccountCreds {
@@ -1166,6 +1205,7 @@ impl From<AccountConfig> for AccountCreds {
 pub enum AccountConfig {
     Regular {
         name: String,
+        #[serde(default = "empty_pw_hash", skip_serializing)]
         pw_hash: PWHash,
         server: String,
         #[serde(flatten)]
@@ -1173,6 +1213,7 @@ pub enum AccountConfig {
     },
     SF {
         name: String,
+        #[serde(default = "empty_pw_hash", skip_serializing)]
         pw_hash: PWHash,
         #[serde(default)]
         characters: Vec<SFAccCharacter>,

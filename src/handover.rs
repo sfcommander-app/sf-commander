@@ -60,8 +60,9 @@ pub struct Handover {
     pub console: Vec<ConsoleLine>,
     #[serde(default)]
     pub successes: Vec<ConsoleLine>,
-    /// STOP was pressed - the new version must not start talking to the
-    /// game just because it is new
+    /// Historical UI state retained for handover compatibility. A new
+    /// process always activates the master Kill Switch regardless of this
+    /// value.
     #[serde(default)]
     pub paused: bool,
     /// Burst mode: the session that is open and when the next one is due.
@@ -442,7 +443,11 @@ impl Helper {
         self.console.extend(handover.console);
         self.successes.extend(handover.successes);
         self.console_seen = self.console.len();
-        self.paused = handover.paused;
+        // A process handover must not inherit permission to write. The new
+        // executable starts fail-closed just like a cold start; the user
+        // explicitly releases the master Kill Switch after seeing the update.
+        self.paused = true;
+        crate::safety::set_killed(true);
         self.burst_until = handover.burst_until;
         self.burst_next = handover.burst_next;
         if let Some(v) = handover.view {

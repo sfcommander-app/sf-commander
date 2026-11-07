@@ -282,11 +282,16 @@ impl Helper {
             .center_x()
         };
         let stop = button(switch_face(
-            if self.paused { t("RESUME") } else { t("STOP") }.to_string(),
+            if self.paused {
+                t("ENABLE WRITES")
+            } else {
+                t("KILL SWITCH")
+            }
+            .to_string(),
             self.paused,
         ))
         .padding([4, 8])
-        .width(switch_w(t("RESUME"), t("STOP")))
+        .width(switch_w(t("ENABLE WRITES"), t("KILL SWITCH")))
         // Lit while the app is standing still and RESUME is the thing to
         // press; grey while it is working and STOP is merely available.
         // The red is gone from here: when the app is stopped a red band
@@ -1399,7 +1404,7 @@ impl Helper {
             text(self.attendance_line())
                 .size(12)
                 .style(theme::Text::Color(style::ACCENT)),
-            text(t("Nobody real takes every portal, every defense and every attack. The bot skips a few on purpose - about 15 % of portals, 10 % of defenses, 5 % of attacks at BALANCED, twice that at STEALTH, none at NO SHAME - and keeps count so the misses never pile up."))
+            text(t("Enabled guild duties are never deliberately skipped. This local record says what the app scheduled; authoritative participation stays unknown until it is confirmed from observed system-mail evidence."))
                 .size(11)
                 .style(theme::Text::Color(style::MUTED)),
         )
@@ -2525,8 +2530,8 @@ impl Helper {
             )
         } else if self.paused {
             (
-                t("STOPPED - the app is not talking to the game. Go play in the \
-                 browser; press RESUME in the top left when you are done.")
+                t("MASTER KILL SWITCH ACTIVE - no game write can be sent. \
+                   Press ENABLE WRITES in the top left only when you are ready.")
                     .to_string(),
                 Color::from_rgb(0.55, 0.20, 0.20),
             )
@@ -2629,7 +2634,7 @@ impl Helper {
         let defense = self.attendance.total(Duty::Defense);
         let attack = self.attendance.total(Duty::Attack);
         format!(
-            "Guild attendance over ~{} decisions: {}/{} portal, {}/{} defense, {}/{} attack ({})",
+            "Local guild sign-up record over ~{} decisions: {}/{} portal, {}/{} defense, {}/{} attack ({}) - not combat evidence",
             crate::attendance::WINDOW,
             portal.0,
             portal.1,
@@ -3126,6 +3131,10 @@ impl Helper {
         let head = row!(
             text(format!("{} ({})", t("Console"), self.console.len())).size(12),
             horizontal_space(),
+            button(text(t("Export CSV")).size(11))
+                .padding([2, 6])
+                .style(crate::ui::style::quiet())
+                .on_press(Message::ExportActionAudit),
             button(text(t("Clear")).size(11))
                 .padding([2, 6])
                 .style(crate::ui::style::quiet())
