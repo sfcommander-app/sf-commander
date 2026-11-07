@@ -158,15 +158,15 @@ pub fn bar(c: Color) -> theme::ProgressBar {
 pub const NAME_GOLD: Color =
     Color::from_rgb(230.0 / 255.0, 200.0 / 255.0, 149.0 / 255.0);
 pub const NEON: Color =
-    Color::from_rgb(186.0 / 255.0, 176.0 / 255.0, 255.0 / 255.0);
+    Color::from_rgb(186.0 / 255.0, 176.0 / 255.0, 1.0);
 pub const GOLD: Color =
-    Color::from_rgb(241.0 / 255.0, 239.0 / 255.0, 255.0 / 255.0);
+    Color::from_rgb(241.0 / 255.0, 239.0 / 255.0, 1.0);
 pub const GOLD_DIM: Color =
     Color::from_rgb(52.0 / 255.0, 54.0 / 255.0, 79.0 / 255.0);
 pub const GOLD_DEEP: Color =
     Color::from_rgb(41.0 / 255.0, 43.0 / 255.0, 72.0 / 255.0);
 pub const ACCENT: Color =
-    Color::from_rgb(186.0 / 255.0, 176.0 / 255.0, 255.0 / 255.0);
+    Color::from_rgb(186.0 / 255.0, 176.0 / 255.0, 1.0);
 pub const FRAME: Color =
     Color::from_rgb(17.0 / 255.0, 18.0 / 255.0, 35.0 / 255.0);
 pub const CARD: Color =
