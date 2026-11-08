@@ -9,6 +9,7 @@ use super::glyphs::ticked as checkbox;
 // His lettering stands in for the toolkit's `text`, so every line on
 // this screen is set in the face the purse card is
 use super::glyphs::lettered as text;
+use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::{
@@ -18,56 +19,121 @@ use crate::{
     util::LockExt,
 };
 
-fn money(v: f64) -> String {
-    const UNITS: [(&str, f64); 5] =
-        [("Q", 1e15), ("T", 1e12), ("B", 1e9), ("M", 1e6), ("K", 1e3)];
-    for (name, size) in UNITS {
-        if v >= size {
-            return format!("{:.2} {name}", v / size);
+const SCALE_NAMES: [&str; 22] = [
+    "",
+    "thousand",
+    "million",
+    "billion",
+    "trillion",
+    "quadrillion",
+    "quintillion",
+    "sextillion",
+    "septillion",
+    "octillion",
+    "nonillion",
+    "decillion",
+    "undecillion",
+    "duodecillion",
+    "tredecillion",
+    "quattuordecillion",
+    "quindecillion",
+    "sexdecillion",
+    "septendecillion",
+    "octodecillion",
+    "novemdecillion",
+    "vigintillion",
+];
+
+fn exact_amount(value: &BigInt) -> String {
+    let digits = value.to_string();
+    let (sign, digits) = digits
+        .strip_prefix('-')
+        .map_or(("", digits.as_str()), |digits| ("-", digits));
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(' ');
         }
+        grouped.push(ch);
     }
-    format!("{v:.0}")
+    format!("{sign}{grouped}")
+}
+
+/// The same named scale used in Companion, but calculated from `BigInt` so
+/// Arena Manager money and upgrade costs never lose precision or stop at Q.
+fn named_amount(value: &BigInt) -> String {
+    let negative = value.sign() == num_bigint::Sign::Minus;
+    let absolute = if negative { -value } else { value.clone() };
+    let digits = absolute.to_string();
+    let mut scale = (digits.len().saturating_sub(1)) / 3;
+    if scale < 2 {
+        return exact_amount(value);
+    }
+    if scale >= SCALE_NAMES.len() {
+        let fraction = digits
+            .chars()
+            .skip(1)
+            .take(3)
+            .collect::<String>()
+            .trim_end_matches('0')
+            .to_string();
+        return format!(
+            "{}{}{} × 10^{}",
+            if negative { "-" } else { "" },
+            &digits[..1],
+            if fraction.is_empty() {
+                String::new()
+            } else {
+                format!(".{fraction}")
+            },
+            digits.len() - 1
+        );
+    }
+
+    let divisor = BigInt::from(10u8).pow((scale * 3) as u32);
+    let mut hundredths = (&absolute * 100u8 + &divisor / 2u8) / &divisor;
+    if hundredths >= BigInt::from(100_000u32)
+        && scale + 1 < SCALE_NAMES.len()
+    {
+        hundredths = (&hundredths + 500u16) / 1_000u16;
+        scale += 1;
+    }
+    let whole = &hundredths / 100u8;
+    let fraction = (&hundredths % 100u8).to_string();
+    let fraction = format!("{fraction:0>2}").trim_end_matches('0').to_string();
+    format!(
+        "{}{}{} {}",
+        if negative { "-" } else { "" },
+        whole,
+        if fraction.is_empty() {
+            String::new()
+        } else {
+            format!(".{fraction}")
+        },
+        t(SCALE_NAMES[scale])
+    )
 }
 
 /// Large rune totals are decisions, not serial numbers. Say the magnitude in
 /// words (the same way Companion does) and leave the exact integer for a
 /// tooltip. A fifteen-digit value is readable as "12.4 trillion" at a glance.
 fn named_runes(value: u128) -> String {
-    let value_f = value as f64;
-    for (size, name) in [
-        (1e18, t("quintillion")),
-        (1e15, t("quadrillion")),
-        (1e12, t("trillion")),
-        (1e9, t("billion")),
-        (1e6, t("million")),
-    ] {
-        if value_f >= size {
-            let scaled = value_f / size;
-            return if scaled < 10.0 {
-                format!("{scaled:.2} {name}")
-            } else if scaled < 100.0 {
-                format!("{scaled:.1} {name}")
-            } else {
-                format!("{scaled:.0} {name}")
-            };
-        }
-    }
-    crate::ui::thousands(value)
+    named_amount(&BigInt::from(value))
 }
 
-fn rune_tile<'a>(
+fn amount_tile<'a>(
     caption: impl ToString,
-    value: u128,
+    value: &BigInt,
     colour: iced::Color,
     under: Option<String>,
 ) -> Element<'a, Message> {
     iced::widget::tooltip(
-        style::tile_sub(caption, named_runes(value), colour, under),
+        style::tile_sub(caption, named_amount(value), colour, under),
         container(
             text(format!(
                 "{}: {}",
                 t("Exact value"),
-                crate::ui::thousands(value)
+                exact_amount(value)
             ))
             .size(11),
         )
@@ -77,6 +143,15 @@ fn rune_tile<'a>(
     .gap(5)
     .style(iced::theme::Container::Box)
     .into()
+}
+
+fn rune_tile<'a>(
+    caption: impl ToString,
+    value: u128,
+    colour: iced::Color,
+    under: Option<String>,
+) -> Element<'a, Message> {
+    amount_tile(caption, &BigInt::from(value), colour, under)
 }
 
 /// The arena's buildings by the names the game gives them, rather than
@@ -161,10 +236,11 @@ pub fn view_arena_manager(player: &AccountInfo) -> Element<'_, Message> {
             let purse = idle.current_money.to_f64().unwrap_or(0.0);
             all = all.push(
                 row!(
-                    style::tile(
+                    amount_tile(
                         t("Arena money"),
-                        money(purse),
-                        style::NAME_GOLD
+                        &idle.current_money,
+                        style::NAME_GOLD,
+                        None,
                     ),
                     // Purple: the runes in the bank only ever go up, so
                     // this is a running total, not a figure to act on
@@ -233,13 +309,23 @@ pub fn view_arena_manager(player: &AccountInfo) -> Element<'_, Message> {
                                 .size(11)
                                 .style(iced::theme::Text::Color(style::MUTED)),
                             iced::widget::horizontal_space(),
-                            text(money(cost)).size(14).style(
-                                iced::theme::Text::Color(if affordable {
-                                    style::GOOD
-                                } else {
-                                    style::BAD
-                                })
-                            ),
+                            iced::widget::tooltip(
+                                text(named_amount(&b.upgrade_cost)).size(14).style(
+                                    iced::theme::Text::Color(if affordable {
+                                        style::GOOD
+                                    } else {
+                                        style::BAD
+                                    })
+                                ),
+                                container(text(format!(
+                                    "{}: {}",
+                                    t("Exact value"),
+                                    exact_amount(&b.upgrade_cost)
+                                )).size(11)).padding(6),
+                                iced::widget::tooltip::Position::Bottom,
+                            )
+                            .gap(5)
+                            .style(iced::theme::Container::Box),
                         )
                         .spacing(6)
                         .align_items(Alignment::Center),
@@ -321,7 +407,7 @@ pub fn view_arena_manager(player: &AccountInfo) -> Element<'_, Message> {
         } else {
             t("Still short of").to_string()
         },
-        crate::ui::thousands(target),
+        named_runes(target),
         Some(if due { style::GOOD } else { style::MUTED }),
     ));
     resetting = resetting.push(text(t("Fixed threshold: the selected percentage is never randomized.")).size(12));
@@ -370,7 +456,8 @@ pub fn view_arena_manager(player: &AccountInfo) -> Element<'_, Message> {
 
 #[cfg(test)]
 mod tests {
-    use super::named_runes;
+    use super::{exact_amount, named_amount, named_runes};
+    use num_bigint::BigInt;
 
     #[test]
     fn long_rune_totals_have_human_names() {
@@ -378,5 +465,18 @@ mod tests {
         assert!(named_runes(1_250_000).starts_with("1.25 "));
         assert!(named_runes(12_400_000_000_000).starts_with("12.4 "));
         assert!(named_runes(8_000_000_000_000_000).starts_with("8.00 "));
+    }
+
+    #[test]
+    fn arena_sized_values_choose_the_largest_readable_scale() {
+        let value = BigInt::parse_bytes(b"407695223965000000000000000000", 10)
+            .expect("test number");
+        let shown = named_amount(&value);
+        assert!(shown.starts_with("408 "), "{shown}");
+        assert!(shown.ends_with("octillion"), "{shown}");
+        assert_eq!(
+            exact_amount(&value),
+            "407 695 223 965 000 000 000 000 000 000"
+        );
     }
 }

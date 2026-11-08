@@ -1,5 +1,10 @@
 # Changelog
 
+## 6.2.14 — Arena Manager large-number fix
+- All Arena Manager values now share one arbitrary-precision named formatter: money, owned/offered/target runes, remaining runes and every building upgrade price
+- The formatter covers named scales through vigintillion instead of stopping at quintillion and leaving another twelve digits in front of the unit
+- Exact unrounded values remain available on hover; affordability calculations are unchanged
+
 ## 6.2.13 — Activity and Arena Manager clarity
 - Activity now starts with a Companion-style overview of the named automation run, current task, queued work, last completed task and today's results
 - Human-readable live/module history is separated from the durable verified write history; internal timestamp action IDs stay out of the UI
