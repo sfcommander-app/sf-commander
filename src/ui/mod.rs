@@ -3387,21 +3387,66 @@ pub fn gold_str(silver: u64) -> String {
 
 /// Every automation's log in one place, newest first
 impl Helper {
-    /// The Activity log tab: the live console of everything the bot sends
-    /// (every character) on the left, this character's own module logs on
-    /// the right
+    /// The Activity page answers four questions before showing the detail:
+    /// which automation run this is, what is happening, what is queued and
+    /// what most recently finished. The lower panes then separate the
+    /// readable event history from the durable write audit.
     fn view_log<'a>(&'a self, player: &'a AccountInfo) -> Element<'a, Message> {
-        row!(
-            container(self.live_feed(&player.name, false))
-                .width(Length::FillPortion(1))
-                .height(Length::Fill)
-                .padding(12)
-                .style(style::card()),
-            container(view_module_log(player))
-                .width(Length::FillPortion(1))
-                .height(Length::Fill)
-                .padding(12)
-                .style(style::card()),
+        let detail: Element<'a, Message> = if self.window_w >= 1_420.0 {
+            row!(
+                container(self.live_feed(&player.name, false))
+                    .width(Length::FillPortion(3))
+                    .height(Length::Fill)
+                    .padding(12)
+                    .style(style::card()),
+                column!(
+                    container(view_module_log(player))
+                        .width(Length::Fill)
+                        .height(Length::FillPortion(3))
+                        .padding(12)
+                        .style(style::card()),
+                    container(view_action_audit(player))
+                        .width(Length::Fill)
+                        .height(Length::FillPortion(2))
+                        .padding(12)
+                        .style(style::card()),
+                )
+                .spacing(12)
+                .width(Length::FillPortion(2))
+                .height(Length::Fill),
+            )
+            .spacing(12)
+            .height(Length::Fill)
+            .into()
+        } else {
+            column!(
+                container(self.live_feed(&player.name, false))
+                    .width(Length::Fill)
+                    .height(Length::FillPortion(3))
+                    .padding(12)
+                    .style(style::card()),
+                row!(
+                    container(view_module_log(player))
+                        .width(Length::FillPortion(1))
+                        .height(Length::Fill)
+                        .padding(12)
+                        .style(style::card()),
+                    container(view_action_audit(player))
+                        .width(Length::FillPortion(1))
+                        .height(Length::Fill)
+                        .padding(12)
+                        .style(style::card()),
+                )
+                .spacing(12)
+                .height(Length::FillPortion(2)),
+            )
+            .spacing(12)
+            .height(Length::Fill)
+            .into()
+        };
+        column!(
+            activity_overview(self, player),
+            detail,
         )
         .spacing(12)
         .padding(18)
@@ -3409,6 +3454,195 @@ impl Helper {
         .height(Length::Fill)
         .into()
     }
+}
+
+fn activity_card<'a>(
+    caption: impl ToString,
+    value: impl ToString,
+    detail: impl ToString,
+    colour: Color,
+) -> Element<'a, Message> {
+    container(
+        column!(
+            style::bold(caption.to_string(), style::MUTED, 10.0),
+            text(value.to_string())
+                .size(15)
+                .style(theme::Text::Color(colour)),
+            text(detail.to_string())
+                .size(10)
+                .style(theme::Text::Color(style::MUTED)),
+        )
+        .spacing(3),
+    )
+    .padding([8, 10])
+    .width(Length::Fill)
+    .style(style::well())
+    .into()
+}
+
+fn age_label(at: DateTime<Local>) -> String {
+    let seconds = (Local::now() - at).num_seconds().max(0);
+    if seconds < 60 {
+        t("just now").to_string()
+    } else if seconds < 3_600 {
+        format!("{} min {}", seconds / 60, t("ago"))
+    } else if seconds < 86_400 {
+        format!("{} h {}", seconds / 3_600, t("ago"))
+    } else {
+        at.format("%d.%m. %H:%M").to_string()
+    }
+}
+
+fn activity_overview<'a>(
+    helper: &'a Helper,
+    player: &'a AccountInfo,
+) -> Element<'a, Message> {
+    let (current, current_detail, current_colour) =
+        match &*player.status.lock_safe() {
+            AccountStatus::Busy(_, reason) => (
+                reason.to_string(),
+                t("working now").to_string(),
+                style::GOOD,
+            ),
+            AccountStatus::Idle(..) if !player.queue.is_empty() => (
+                t("Waiting for its turn").to_string(),
+                t("another queued task will start next").to_string(),
+                style::NAME_GOLD,
+            ),
+            AccountStatus::Idle(..) => (
+                t("Waiting").to_string(),
+                t("no task is running").to_string(),
+                style::MUTED,
+            ),
+            AccountStatus::LoggingIn | AccountStatus::LoggingInAgain => (
+                t("Signing in").to_string(),
+                t("automation is waiting for the account").to_string(),
+                style::NAME_GOLD,
+            ),
+            AccountStatus::FatalError(error) => (
+                t("Needs attention").to_string(),
+                error.clone(),
+                style::BAD,
+            ),
+        };
+
+    let queued = player.queue.len();
+    let queue_detail = player
+        .queue
+        .iter()
+        .take(2)
+        .map(|(job, _)| t(job.label()))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let queue_detail = if queue_detail.is_empty() {
+        t("nothing waiting").to_string()
+    } else {
+        queue_detail
+    };
+
+    let (last, last_detail) = player.last_job_done.map_or_else(
+        || (t("Nothing yet").to_string(), t("this app run").to_string()),
+        |(job, at)| (t(job).to_string(), age_label(at)),
+    );
+    let run_started = helper
+        .session_started
+        .or_else(|| helper.console.front().map(|line| line.at))
+        .unwrap_or(player.last_updated);
+    let run_name = format!(
+        "{} · {}",
+        titlecase::titlecase(&player.name),
+        run_started.format("%d.%m. %H:%M")
+    );
+    let run_detail = if helper.paused {
+        t("writes stopped by Kill Switch")
+    } else if helper.boosting() {
+        t("doing everything now")
+    } else if helper.burst_until.is_some_and(|until| until > Local::now()) {
+        t("automation session is open")
+    } else {
+        t("monitoring and scheduled automation")
+    };
+
+    let today = Local::now().date_naive();
+    let (successes, failures) = helper
+        .console
+        .iter()
+        .filter(|line| {
+            line.at.date_naive() == today
+                && line.who.eq_ignore_ascii_case(&player.name)
+        })
+        .fold((0usize, 0usize), |(yes, no), line| match line.ok {
+            Some(true) => (yes + 1, no),
+            Some(false) => (yes, no + 1),
+            None => (yes, no),
+        });
+
+    let enabled = running_jobs(player);
+    let enabled_line = if enabled.is_empty() {
+        t("No automation modules enabled").to_string()
+    } else {
+        format!(
+            "{}: {}",
+            t("Enabled modules"),
+            enabled.into_iter().collect::<Vec<_>>().join(" · ")
+        )
+    };
+
+    let cards: Element<'a, Message> = if helper.window_w >= 1_420.0 {
+        row!(
+            activity_card(t("Automation run"), run_name.clone(), run_detail, style::NEON),
+            activity_card(t("Current task"), current.clone(), current_detail.clone(), current_colour),
+            activity_card(
+                t("Queued work"),
+                format!("{queued} {}", t("tasks")),
+                queue_detail.clone(),
+                if queued > 0 { style::NAME_GOLD } else { style::MUTED },
+            ),
+            activity_card(t("Last completed"), last.clone(), last_detail.clone(), style::GOOD),
+        )
+        .spacing(8)
+        .into()
+    } else {
+        column!(
+            row!(
+                activity_card(t("Automation run"), run_name, run_detail, style::NEON),
+                activity_card(t("Current task"), current, current_detail, current_colour),
+            )
+            .spacing(8),
+            row!(
+                activity_card(
+                    t("Queued work"),
+                    format!("{queued} {}", t("tasks")),
+                    queue_detail,
+                    if queued > 0 { style::NAME_GOLD } else { style::MUTED },
+                ),
+                activity_card(t("Last completed"), last, last_detail, style::GOOD),
+            )
+            .spacing(8),
+        )
+        .spacing(8)
+        .into()
+    };
+
+    style::panel(
+        format!(
+            "{} · {} {} / {} {}",
+            t("Automation overview"),
+            successes,
+            t("successful today"),
+            failures,
+            t("failed today")
+        ),
+        column!(
+            cards,
+            text(enabled_line)
+                .size(10)
+                .style(theme::Text::Color(style::MUTED)),
+        )
+        .spacing(7),
+    )
+    .width(Length::Fill)
+    .into()
 }
 
 /// This character's own doings, every module merged and newest first
@@ -3471,11 +3705,69 @@ fn view_module_log(player: &AccountInfo) -> Element<'_, Message> {
         );
     }
     column!(
-        crate::ui::style::heading(t("Activity log")),
+        crate::ui::style::heading(t("Module history")),
         widget::scrollable(col).height(Length::Fill)
     )
     .spacing(8)
     .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
+}
+
+fn view_action_audit(player: &AccountInfo) -> Element<'_, Message> {
+    use crate::safety::{Outcome, Source};
+
+    let entries = crate::safety::recent_actions(200)
+        .into_iter()
+        .filter(|entry| entry.character.eq_ignore_ascii_case(&player.name))
+        .take(60);
+    let mut lines = column!().spacing(7).padding(5);
+    let mut shown = 0usize;
+    for entry in entries {
+        shown += 1;
+        let at = DateTime::parse_from_rfc3339(&entry.at)
+            .map(|at| at.with_timezone(&Local).format("%d.%m. %H:%M").to_string())
+            .unwrap_or_else(|_| entry.at.clone());
+        let (status, colour) = match entry.outcome {
+            Outcome::VerifiedSuccess => (t("Verified"), style::GOOD),
+            Outcome::VerifiedFailure => (t("Failed"), style::BAD),
+            Outcome::Inconclusive => (t("Unconfirmed"), style::NAME_GOLD),
+            Outcome::Blocked => (t("Blocked"), style::BAD),
+            Outcome::Started => continue,
+        };
+        let source = match entry.source {
+            Source::Manual => t("manual"),
+            Source::Automation => t("automation"),
+            Source::Unspecified => t("system"),
+        };
+        let action = crate::util::split_camel(
+            &entry.action.replace('_', " ").replace('-', " "),
+        );
+        lines = lines.push(
+            column!(
+                row!(
+                    style::bold(at, style::MUTED, 10.0),
+                    style::bold(status, colour, 10.0),
+                    horizontal_space(),
+                    style::bold(source, style::MUTED, 9.0),
+                )
+                .spacing(7),
+                text(action).size(12).style(theme::Text::Color(colour)),
+            )
+            .spacing(2),
+        );
+    }
+    if shown == 0 {
+        lines = lines.push(text(t("No verified write actions yet")).size(11));
+    }
+    style::panel_bar(
+        t("Verified write history"),
+        button(text(t("Export CSV")).size(10))
+            .padding([1, 5])
+            .style(style::quiet())
+            .on_press(Message::ExportActionAudit),
+        scrollable(lines).height(Length::Fill),
+    )
     .height(Length::Fill)
     .into()
 }

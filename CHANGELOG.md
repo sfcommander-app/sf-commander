@@ -1,5 +1,12 @@
 # Changelog
 
+## 6.2.13 — Activity and Arena Manager clarity
+- Activity now starts with a Companion-style overview of the named automation run, current task, queued work, last completed task and today's results
+- Human-readable live/module history is separated from the durable verified write history; internal timestamp action IDs stay out of the UI
+- The durable write journal is loaded from a bounded tail and cached, so opening Activity does not repeatedly read a growing file
+- Arena Manager shows large rune totals by magnitude (for example `12.4 trillion`) with the exact value available on hover
+- New Activity and rune labels have Czech translations
+
 ## 6.2.12 — Guild Black Gem chance
 - Guild summary shows the Black Gem chance from eligible members
 - Each member contributes exactly 1% only when their own Hall of Knights is level 15 or higher; low member levels are never pooled together

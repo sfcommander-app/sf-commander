@@ -1,9 +1,9 @@
 //! Central safety boundary for commands that can mutate game state.
 
 use std::{
-    collections::HashMap,
-    fs::OpenOptions,
-    io::Write,
+    collections::{HashMap, HashSet, VecDeque},
+    fs::{File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
     sync::{
         Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -19,6 +19,7 @@ use sf_api::{
 static KILLED: AtomicBool = AtomicBool::new(true);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 static AUDIT_LOCK: Mutex<()> = Mutex::new(());
+static RECENT_AUDIT: OnceLock<Mutex<VecDeque<AuditEntry>>> = OnceLock::new();
 static PENDING: OnceLock<Mutex<HashMap<(String, String), String>>> =
     OnceLock::new();
 const BLOCKED_PREFIX: &str = "SAFETY_BLOCKED:";
@@ -41,16 +42,84 @@ pub enum Outcome {
     Blocked,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AuditEntry {
-    at: String,
+pub struct AuditEntry {
+    pub at: String,
     action_id: String,
-    character: String,
-    action: String,
-    source: Source,
-    outcome: Outcome,
-    detail: Option<String>,
+    pub character: String,
+    pub action: String,
+    pub source: Source,
+    pub outcome: Outcome,
+    pub detail: Option<String>,
+}
+
+const RECENT_AUDIT_LIMIT: usize = 1_000;
+const RECENT_AUDIT_BYTES: u64 = 1_048_576;
+
+fn load_recent_audit() -> VecDeque<AuditEntry> {
+    let Ok(mut file) = File::open(crate::app_path("action-audit.jsonl")) else {
+        return VecDeque::new();
+    };
+    let Ok(len) = file.metadata().map(|metadata| metadata.len()) else {
+        return VecDeque::new();
+    };
+    let start = len.saturating_sub(RECENT_AUDIT_BYTES);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return VecDeque::new();
+    }
+    let mut bytes = Vec::with_capacity((len - start) as usize);
+    if file.read_to_end(&mut bytes).is_err() {
+        return VecDeque::new();
+    }
+    // A bounded tail can start in the middle of a UTF-8 code point or JSON
+    // row. Drop that first fragment and parse complete rows only.
+    if start > 0 {
+        let Some(first_newline) = bytes.iter().position(|byte| *byte == b'\n')
+        else {
+            return VecDeque::new();
+        };
+        bytes.drain(..=first_newline);
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    text.lines()
+        .rev()
+        .take(RECENT_AUDIT_LIMIT)
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
+fn recent_audit() -> &'static Mutex<VecDeque<AuditEntry>> {
+    RECENT_AUDIT.get_or_init(|| Mutex::new(load_recent_audit()))
+}
+
+fn summarized_actions(
+    entries: impl DoubleEndedIterator<Item = AuditEntry>,
+    max: usize,
+) -> Vec<AuditEntry> {
+    let mut seen = HashSet::new();
+    entries
+        .rev()
+        .filter(|entry| !matches!(entry.outcome, Outcome::Started))
+        .filter(|entry| seen.insert(entry.action_id.clone()))
+        .take(max)
+        .collect()
+}
+
+/// Latest durable write outcomes for the human-facing Activity page.
+///
+/// A write produces several journal rows with the same internal id. The UI
+/// needs one readable outcome, not the timestamp-based id or every transition.
+/// The full append-only journal remains available through the CSV export.
+#[must_use]
+pub fn recent_actions(max: usize) -> Vec<AuditEntry> {
+    recent_audit()
+        .lock()
+        .map(|entries| summarized_actions(entries.iter().cloned(), max))
+        .unwrap_or_default()
 }
 
 #[must_use]
@@ -107,6 +176,9 @@ fn append(entry: &AuditEntry) -> Result<(), String> {
     let _guard = AUDIT_LOCK
         .lock()
         .map_err(|_| "the action audit lock is unavailable".to_string())?;
+    // Initialise the memory view before appending. If it were initialised
+    // afterwards it would read the just-written row and then push it again.
+    let recent = recent_audit();
     let path = crate::app_path("action-audit.jsonl");
     let line = serde_json::to_string(entry)
         .map_err(|_| "could not serialize the action audit".to_string())?;
@@ -118,7 +190,14 @@ fn append(entry: &AuditEntry) -> Result<(), String> {
     writeln!(file, "{line}")
         .map_err(|_| "could not write the action audit".to_string())?;
     file.sync_data()
-        .map_err(|_| "could not flush the action audit".to_string())
+        .map_err(|_| "could not flush the action audit".to_string())?;
+    if let Ok(mut entries) = recent.lock() {
+        entries.push_back(entry.clone());
+        while entries.len() > RECENT_AUDIT_LIMIT {
+            entries.pop_front();
+        }
+    }
+    Ok(())
 }
 
 fn audit(
@@ -316,5 +395,29 @@ mod tests {
             "[REDACTED SENSITIVE ERROR]"
         );
         assert_eq!(redact("not enough silver"), "not enough silver");
+    }
+
+    #[test]
+    fn activity_hides_internal_ids_and_keeps_latest_outcome() {
+        let entry = |id: &str, outcome| AuditEntry {
+            at: "2026-11-08T12:00:00Z".to_string(),
+            action_id: id.to_string(),
+            character: "Kalic".to_string(),
+            action: "FortressAttack".to_string(),
+            source: Source::Automation,
+            outcome,
+            detail: None,
+        };
+        let entries = vec![
+            entry("1762603200000-1", Outcome::Started),
+            entry("1762603200000-1", Outcome::Inconclusive),
+            entry("1762603200000-1", Outcome::VerifiedSuccess),
+            entry("1762603200001-2", Outcome::Blocked),
+        ];
+
+        let shown = summarized_actions(entries.into_iter(), 10);
+        assert_eq!(shown.len(), 2);
+        assert!(matches!(shown[0].outcome, Outcome::Blocked));
+        assert!(matches!(shown[1].outcome, Outcome::VerifiedSuccess));
     }
 }

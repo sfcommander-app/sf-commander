@@ -29,6 +29,56 @@ fn money(v: f64) -> String {
     format!("{v:.0}")
 }
 
+/// Large rune totals are decisions, not serial numbers. Say the magnitude in
+/// words (the same way Companion does) and leave the exact integer for a
+/// tooltip. A fifteen-digit value is readable as "12.4 trillion" at a glance.
+fn named_runes(value: u128) -> String {
+    let value_f = value as f64;
+    for (size, name) in [
+        (1e18, t("quintillion")),
+        (1e15, t("quadrillion")),
+        (1e12, t("trillion")),
+        (1e9, t("billion")),
+        (1e6, t("million")),
+    ] {
+        if value_f >= size {
+            let scaled = value_f / size;
+            return if scaled < 10.0 {
+                format!("{scaled:.2} {name}")
+            } else if scaled < 100.0 {
+                format!("{scaled:.1} {name}")
+            } else {
+                format!("{scaled:.0} {name}")
+            };
+        }
+    }
+    crate::ui::thousands(value)
+}
+
+fn rune_tile<'a>(
+    caption: impl ToString,
+    value: u128,
+    colour: iced::Color,
+    under: Option<String>,
+) -> Element<'a, Message> {
+    iced::widget::tooltip(
+        style::tile_sub(caption, named_runes(value), colour, under),
+        container(
+            text(format!(
+                "{}: {}",
+                t("Exact value"),
+                crate::ui::thousands(value)
+            ))
+            .size(11),
+        )
+        .padding(6),
+        iced::widget::tooltip::Position::Bottom,
+    )
+    .gap(5)
+    .style(iced::theme::Container::Box)
+    .into()
+}
+
 /// The arena's buildings by the names the game gives them, rather than
 /// the `{:?}` of the library's enum - "StrayingMonsters" is a Rust
 /// identifier, not something a player reads
@@ -118,14 +168,10 @@ pub fn view_arena_manager(player: &AccountInfo) -> Element<'_, Message> {
                     ),
                     // Purple: the runes in the bank only ever go up, so
                     // this is a running total, not a figure to act on
-                    style::tile(
-                        t("runes"),
-                        crate::ui::thousands(owned),
-                        style::NEON
-                    ),
-                    style::tile_sub(
+                    rune_tile(t("Runes owned"), owned, style::NEON, None),
+                    rune_tile(
                         t("A reset now gives"),
-                        crate::ui::thousands(offer),
+                        offer,
                         if due {
                             style::GOOD
                         } else if offer > 0 {
@@ -138,15 +184,15 @@ pub fn view_arena_manager(player: &AccountInfo) -> Element<'_, Message> {
                         } else {
                             format!(
                                 "{} {}",
-                                crate::ui::thousands(to_go),
+                                named_runes(to_go),
                                 t("to go")
                             )
                         }),
                     ),
-                    style::tile(
-                        t("Threshold"),
-                        crate::ui::thousands(target),
+                    rune_tile(
+                        t("Threshold"), target,
                         style::NAME_GOLD,
+                        None,
                     ),
                     style::tile(
                         t("resets so far"),
@@ -320,4 +366,17 @@ pub fn view_arena_manager(player: &AccountInfo) -> Element<'_, Message> {
     }
 
     style::page(all)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::named_runes;
+
+    #[test]
+    fn long_rune_totals_have_human_names() {
+        assert_eq!(named_runes(999_999), "999 999");
+        assert!(named_runes(1_250_000).starts_with("1.25 "));
+        assert!(named_runes(12_400_000_000_000).starts_with("12.4 "));
+        assert!(named_runes(8_000_000_000_000_000).starts_with("8.00 "));
+    }
 }
