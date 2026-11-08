@@ -128,7 +128,12 @@ Function UninstallPreviousRelease
 
   DetailPrint "Removing the previous S&F Commander application files..."
   ClearErrors
-  ExecWait '"$0\Uninstall.exe" /S' $1
+  ; `_?=` tells the NSIS uninstaller to run in-place instead of spawning a
+  ; temporary child and returning before that child has finished. Without it,
+  ; the old uninstaller could delete the freshly written replacement a moment
+  ; after this installer continued (the upgrade smoke test caught that race).
+  ; It must be the final argument and intentionally is not quoted.
+  ExecWait '"$0\Uninstall.exe" /S _?=$0' $1
   IfErrors uninstall_failed
   StrCmp $1 "0" 0 uninstall_failed
 
