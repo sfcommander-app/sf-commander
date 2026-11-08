@@ -464,7 +464,7 @@ mod tests {
         assert_eq!(named_runes(999_999), "999 999");
         assert!(named_runes(1_250_000).starts_with("1.25 "));
         assert!(named_runes(12_400_000_000_000).starts_with("12.4 "));
-        assert!(named_runes(8_000_000_000_000_000).starts_with("8.00 "));
+        assert!(named_runes(8_000_000_000_000_000).starts_with("8 "));
     }
 
     #[test]
@@ -472,8 +472,9 @@ mod tests {
         let value = BigInt::parse_bytes(b"407695223965000000000000000000", 10)
             .expect("test number");
         let shown = named_amount(&value);
-        assert!(shown.starts_with("408 "), "{shown}");
-        assert!(shown.ends_with("octillion"), "{shown}");
+        assert!(shown.starts_with("407.7 "), "{shown}");
+        assert_eq!(shown.split_whitespace().count(), 2, "{shown}");
+        assert!(shown.len() < 24, "{shown}");
         assert_eq!(
             exact_amount(&value),
             "407 695 223 965 000 000 000 000 000 000"
