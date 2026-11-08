@@ -1580,6 +1580,7 @@ impl Helper {
                 if any && self.config.sounds {
                     crate::sound::play(crate::sound::Sound::Celebrate);
                 }
+                self.sync_new_unlocks();
                 self.sweep();
 
                 // The quiet hours are quiet, not a logout: the characters
@@ -2261,9 +2262,10 @@ impl Helper {
                     // asked: a sale is the one step that cannot be undone
                     si.sell_old = c(|a| a.shop_sell_old, false);
                     si.clear_backpack = c(|a| a.shop_clear_backpack, true);
-                    // The companions are always dressed from the bag
-                    let _ = c(|a| a.equip_companions, true);
-                    si.equip_companions = true;
+                    // Normally on, but the per-character master OFF must
+                    // remain truthful after a restart as well.
+                    si.equip_companions =
+                        c(|a| a.equip_companions, true);
                     si.keep_free = char_conf
                         .map(|a| a.shop_keep_free)
                         .unwrap_or(2)
@@ -9906,6 +9908,86 @@ impl Helper {
     /// build finished, gold that came in) runs within minutes instead of
     /// on the next tick of its own clock. The guild leader's "central
     /// intelligence"
+    fn sync_new_unlocks(&mut self) {
+        let now = Local::now();
+        let target_order = self.config.target_order;
+        let config = &self.config;
+
+        for server in self.servers.0.values_mut() {
+            for account in server.accounts.values_mut() {
+                let full = crate::player::full_automation_enabled(account);
+                let arc = account.status.clone();
+                let status = arc.lock_safe();
+                let gs = match &*status {
+                    AccountStatus::Idle(_, gs) | AccountStatus::Busy(gs, _) => {
+                        gs
+                    }
+                    _ => continue,
+                };
+                let conf = config.get_char_conf(
+                    &account.name,
+                    account.ident.server_id,
+                );
+                let mut unlocked = Vec::new();
+
+                if account.scrapbook_info.is_none()
+                    && let Some(mut info) =
+                        ScrapbookInfo::new(gs, conf, target_order)
+                {
+                    if full {
+                        info.auto_battle = true;
+                    }
+                    account.scrapbook_info = Some(info);
+                    unlocked.push(Job::Arena);
+                }
+                if account.fortress_info.is_none()
+                    && let Some(mut info) = FortressInfo::new(gs, conf)
+                {
+                    if full {
+                        info.auto_attack = true;
+                        info.auto_train = false;
+                        info.auto_collect = true;
+                        info.auto_gems = true;
+                        info.auto_build = true;
+                        info.recruit_all = true;
+                        info.gem_socket = true;
+                        info.auto_since = Some(now);
+                    }
+                    account.fortress_info = Some(info);
+                    unlocked.extend([
+                        Job::FortressAttack,
+                        Job::FortressCollect,
+                    ]);
+                }
+                if account.underworld_info.is_none()
+                    && let Some(mut info) = UnderworldInfo::new(gs, conf)
+                {
+                    if full {
+                        info.auto_lure = true;
+                        info.auto_collect = true;
+                        info.auto_build = true;
+                    }
+                    account.underworld_info = Some(info);
+                    unlocked.extend([Job::Lure, Job::Underworld]);
+                }
+                drop(status);
+
+                for job in unlocked {
+                    if account_job_enabled(account, job)
+                        && !account.queue.iter().any(|(queued, _)| *queued == job)
+                    {
+                        log::info!(
+                            "{}: unlocked {}; adding it to automation",
+                            account.ident,
+                            job.label()
+                        );
+                        account.queue.push((job, now));
+                    }
+                }
+            }
+        }
+    }
+
     fn sweep(&mut self) {
         if self.halted() {
             return;
@@ -10456,9 +10538,11 @@ impl Helper {
 
         let mut action: Option<(SFCommand, String)> = None;
 
-        // 1) Collect, once a production building is nearly full. The server
-        //    only reports the collectable amount now and then, so it gets
-        //    extrapolated from the hourly production
+        // 1) Collect everything that has accrued at the 15-minute maintenance
+        //    tick. The former 90% threshold was inappropriate for short app
+        //    sessions: XP and resources could sit unclaimed for hours. The
+        //    server only reports the collectable amount now and then, so it is
+        //    extrapolated from the hourly production.
         if collect {
             let since_h = fortress
                 .last_collectable_updated
@@ -10474,7 +10558,7 @@ impl Helper {
                     .min(prod.limit as f64);
                 let storage_full = typ != FortressResourceType::Experience
                     && res.current >= res.limit;
-                if estimated >= prod.limit as f64 * 0.9 && !storage_full {
+                if fortress_production_ready(estimated, storage_full) {
                     action = Some((
                         SFCommand::FortressGather { resource: typ },
                         format!("Collected {typ:?}"),
@@ -10877,10 +10961,6 @@ impl Helper {
         // return in silence, which from the outside is indistinguishable
         // from a broken auto dungeon: the job runs, the log stays empty and
         // there is nothing to debug with
-        if !di.auto {
-            log::info!("{ident}: auto dungeon - switched off");
-            return Command::none();
-        }
         // The demonic portal is its own daily fight - separate from the free
         // dungeon fight and its cooldown - so it is handled first and on its
         // own once-a-day guard. `can_fight` from the game is the authority;
@@ -10914,6 +10994,15 @@ impl Helper {
                     SimpleNote::DemonPortal,
                 );
             }
+        }
+        // Portal-only automation is valid. The previous early return sat
+        // above the portal block, so its own checkbox did nothing unless
+        // ordinary dungeon fighting happened to be enabled as well.
+        if !account.dungeon_info.auto {
+            log::info!(
+                "{ident}: normal auto dungeon switched off; portal check complete"
+            );
+            return Command::none();
         }
         let di = &mut account.dungeon_info;
         if let Some(last) = di.last_auto_fight
@@ -13699,17 +13788,26 @@ impl Helper {
         }
         if let Some(fi) = &mut account.fortress_info {
             fi.auto_attack = on;
+            // The old one-soldier-after-attack mode is superseded by the
+            // full barracks maintainer below.
+            fi.auto_train = false;
             fi.auto_since = on.then_some(now);
             fi.auto_collect = on;
             fi.auto_gems = on;
             fi.auto_build = on;
             fi.recruit_all = on;
+            fi.gem_socket = on;
         }
         account.dungeon_info.auto = on;
+        account.dungeon_info.portal_auto = on;
         account.expedition_info.auto = on;
         account.pet_info.auto_feed = on;
         account.pet_info.auto_arena = on;
         account.idle_info.auto_upgrade = on;
+        // Arena Manager pays continuously; the old collect command only
+        // produced repeated no-op writes. Full automation keeps it off and
+        // automates real upgrades and sacrifices instead.
+        account.idle_info.auto_collect = false;
         account.idle_info.auto_sacrifice = on;
         account.guard_info.auto = on;
         // Beer is part of the day's thirst now, so ON drinks it too; the
@@ -13724,8 +13822,23 @@ impl Helper {
         // pieces are never replaced unless the player unticks that
         account.shop_info.auto = on;
         account.shop_info.attr_auto = on;
+        account.shop_info.clear_backpack = on;
+        account.shop_info.equip_companions = on;
+        account.shop_info.smith_auto = on;
+        account.shop_info.witch_auto = on;
+        account.dailies_info.auto = on;
+        account.dailies_info.mount_auto = on;
         account.social.auto_attack = on;
         account.social.auto_defense = on;
+        account.social.portal_auto = on;
+        // These two change shared guild state or guild membership. They are
+        // never enabled by the generic master switch, but OFF must still be
+        // a truthful stop for a character that enabled them separately.
+        if !on {
+            account.social.raid_auto = false;
+            account.social.finder_auto = false;
+            account.social.report_auto = false;
+        }
         account.social.confirm_off = None;
         if on {
             for job in Job::FULL_BOT_START {
@@ -13744,24 +13857,49 @@ impl Helper {
             conf.underworld_collect = on;
             conf.underworld_build = on;
             conf.auto_fortress = on;
+            conf.fortress_train = false;
             conf.fortress_collect = on;
             conf.fortress_gems = on;
             conf.fortress_build = on;
             conf.fortress_recruit_all = on;
+            conf.gem_socket = on;
             conf.dungeon_auto = on;
+            conf.dungeon_portal = on;
             conf.expedition_auto = on;
             conf.pets_feed = on;
             conf.pets_arena = on;
             conf.idle_upgrade = on;
+            conf.idle_collect = false;
             conf.idle_sacrifice = on;
             conf.guard_auto = on;
             conf.beer_auto = on;
             conf.wheel_auto = on;
             conf.dice_auto = on;
             conf.shop_auto = on;
+            conf.shop_clear_backpack = on;
+            conf.equip_companions = on;
+            conf.smith_auto = on;
+            conf.witch_auto = on;
             conf.attr_auto = on;
+            conf.dailies_auto = on;
+            conf.mount_auto = on;
             conf.guild_attack = on;
             conf.guild_defense = on;
+            conf.guild_portal = on;
+            if !on {
+                conf.guild_raid_auto = false;
+                conf.guild_finder_auto = false;
+                conf.guild_report_auto = false;
+            }
+            _ = self.config.write();
+        }
+        // ON must actually run. Previously it could light up every module
+        // while the global profile remained OFF, leaving a full queue that
+        // was never dispatched. Balanced is the conservative default; the
+        // master Kill Switch remains independent and fail-closed.
+        if on && self.config.off() {
+            self.config.safety = 6;
+            self.config.apply_safety();
             _ = self.config.write();
         }
         Command::none()
@@ -16614,9 +16752,12 @@ pub fn account_job_enabled(a: &AccountInfo, job: Job) -> bool {
         }
         Job::Expedition => a.expedition_info.auto,
         Job::Arena => a.scrapbook_info.as_ref().is_some_and(|s| s.auto_battle),
-        Job::Dungeon => a.dungeon_info.auto,
+        Job::Dungeon => a.dungeon_info.auto || a.dungeon_info.portal_auto,
         Job::GuildSign => {
-            a.social.auto_attack || a.social.auto_defense || a.social.raid_auto
+            a.social.auto_attack
+                || a.social.auto_defense
+                || a.social.raid_auto
+                || a.social.portal_auto
         }
         Job::Pets => a.pet_info.auto_feed || a.pet_info.auto_arena,
         Job::ArenaManager => {
@@ -16654,6 +16795,32 @@ pub fn account_job_enabled(a: &AccountInfo, job: Job) -> bool {
         Job::Attributes => a.shop_info.attr_auto,
         Job::Dailies => a.dailies_info.auto,
         Job::Dice => a.tavern_info.dice_auto,
+    }
+}
+
+/// A 15-minute maintenance pass collects any whole unit currently available.
+/// Storage-full applies to Wood and Stone only; Experience has no destination
+/// storage cap. Keeping this policy in one small function makes the removal of
+/// the old 90% threshold regression-testable.
+fn fortress_production_ready(estimated: f64, storage_full: bool) -> bool {
+    estimated.is_finite() && estimated >= 1.0 && !storage_full
+}
+
+#[cfg(test)]
+mod fortress_collection_tests {
+    use super::fortress_production_ready;
+
+    #[test]
+    fn a_short_session_collects_before_the_production_store_is_nearly_full() {
+        assert!(fortress_production_ready(1.0, false));
+        assert!(fortress_production_ready(125.0, false));
+    }
+
+    #[test]
+    fn empty_invalid_or_blocked_production_is_not_collected() {
+        assert!(!fortress_production_ready(0.99, false));
+        assert!(!fortress_production_ready(f64::NAN, false));
+        assert!(!fortress_production_ready(125.0, true));
     }
 }
 

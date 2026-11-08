@@ -91,6 +91,15 @@ press **Enable writes**. If a write loses its connection before the result can
 be verified, the Kill Switch activates again and the command is not
 automatically replayed.
 
+Each character also has an **Automation ON/OFF** control. ON enables and queues
+the complete safe unattended routine (tavern, dungeons and portals, fortress,
+underworld, arena, Arena Manager, pets, guild duties, daily rewards, mount and
+protected equipment upkeep). Premium mushroom fights, declaring a guild raid
+and changing guild remain explicit opt-ins. OFF disables every automatic job
+for that character; it does not replace the process-wide Kill Switch.
+Fortress Wood, Stone and Experience production is checked and collected every
+15 minutes, so short sessions no longer have to wait for a 90% production store.
+
 The app is not code-signed, so Windows SmartScreen may show *"Windows protected your PC"*. Click **More info → Run anyway**.
 
 ## Build from source

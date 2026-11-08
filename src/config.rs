@@ -272,8 +272,8 @@ pub struct Config {
     /// was 01:00-07:00 and widened by the slider - too much of the day)
     #[serde(default)]
     pub quiet_52_migrated: bool,
-    /// How many times a day the fortress is looked after - collect, gems,
-    /// build, recruit (3-10). It used to be every three minutes
+    /// Legacy setting retained for config compatibility. Fortress maintenance
+    /// now has a fixed 15-minute cadence so short sessions collect production.
     #[serde(default = "default_fortress_visits")]
     pub fortress_visits_per_day: u8,
     /// Set once 5.4 switched off "recruit a soldier after every fortress

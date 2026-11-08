@@ -1,5 +1,14 @@
 # Changelog
 
+## 6.2.16 — truthful full automation
+- The character-level ON switch now enables every safe unattended module, including daily rewards, mount upkeep, both portals, pet arena, Underworld maintenance and all protected equipment housekeeping
+- Every enabled module is queued immediately and included in the central sweep; the scheduler no longer depends on opening a page manually
+- Fortress Wood, Stone and Experience are now collected every 15 minutes when available instead of waiting for 90% production capacity
+- OFF now persists a real per-character stop instead of leaving hidden daily or backpack work active
+- Low-level characters automatically adopt newly unlocked Arena, Fortress and Underworld modules while full automation is on
+- Premium mushroom fights, guild raid declaration and automatic guild changes remain explicit opt-ins
+- Turning ON from the global OFF profile selects Balanced while the independent master Kill Switch remains fail-closed
+
 ## 6.2.15 — clean Windows upgrades
 - The Windows installer now runs the registered previous-version uninstaller before writing the new release
 - Silent upgrades preserve settings, saved login state, logs and guild history while removing old application binaries and registration

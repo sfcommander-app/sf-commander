@@ -60,6 +60,7 @@ pub fn t(s: &'static str) -> &'static str {
 }
 
 const CS: &[(&str, &str)] = &[
+    ("Dice", "Kostky"),
     ("Automation overview", "Přehled automatizace"),
     ("Automation run", "Běh automatizace"),
     ("Current task", "Právě probíhá"),

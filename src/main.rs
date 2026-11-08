@@ -1134,8 +1134,6 @@ impl Application for Helper {
                         SubIdent::FortressMaintain(acc.ident),
                         FortressMaintainChecker {
                             ident: acc.ident,
-                            player_status: acc.status.clone(),
-                            per_day: self.config.fortress_visits_per_day,
                         },
                         move |a: FortressMaintainChecker| async move {
                             (a.check().await, a)
@@ -1143,7 +1141,7 @@ impl Application for Helper {
                     ));
                 }
 
-                if acc.dungeon_info.auto {
+                if acc.dungeon_info.auto || acc.dungeon_info.portal_auto {
                     subs.push(subscription::unfold(
                         SubIdent::AutoDungeon(acc.ident),
                         AutoDungeonChecker {
@@ -1257,7 +1255,7 @@ impl Application for Helper {
                     ));
                 }
 
-                if acc.pet_info.auto_feed {
+                if acc.pet_info.auto_feed || acc.pet_info.auto_arena {
                     subs.push(subscription::unfold(
                         SubIdent::PetFeed(acc.ident),
                         PetFeedChecker { ident: acc.ident },
@@ -1270,6 +1268,7 @@ impl Application for Helper {
                 if acc.social.auto_attack
                     || acc.social.auto_defense
                     || acc.social.raid_auto
+                    || acc.social.portal_auto
                 {
                     subs.push(subscription::unfold(
                         SubIdent::GuildAuto(acc.ident),

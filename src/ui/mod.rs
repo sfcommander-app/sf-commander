@@ -186,16 +186,7 @@ impl Helper {
 
         // FULL BOT: one switch for every farming automation. "On" means all
         // the big ones are running
-        let full_on = player
-            .scrapbook_info
-            .as_ref()
-            .is_some_and(|a| a.auto_battle)
-            && player.dungeon_info.auto
-            && player.expedition_info.auto
-            && player.fortress_info.as_ref().is_none_or(|f| f.auto_attack)
-            && player.pet_info.auto_feed
-            && player.idle_info.auto_upgrade
-            && player.guard_info.auto;
+        let full_on = crate::player::full_automation_enabled(player);
         let running = running_jobs(player);
         let full_bot = row!(
             widget::text(format!(
@@ -3866,7 +3857,7 @@ pub fn running_jobs(player: &AccountInfo) -> Vec<&'static str> {
     {
         jobs.push(t("Arena"));
     }
-    if player.dungeon_info.auto {
+    if player.dungeon_info.auto || player.dungeon_info.portal_auto {
         jobs.push(t("Dungeons"));
     }
     if player.expedition_info.auto {
@@ -3889,13 +3880,22 @@ pub fn running_jobs(player: &AccountInfo) -> Vec<&'static str> {
     if player.underworld_info.as_ref().is_some_and(|a| a.auto_lure) {
         jobs.push(t("Underworld lure"));
     }
-    if player.social.auto_attack || player.social.auto_defense {
+    if player.underworld_info.as_ref().is_some_and(|a| {
+        a.auto_collect || a.auto_build
+    }) {
+        jobs.push(t("Underworld"));
+    }
+    if player.social.auto_attack
+        || player.social.auto_defense
+        || player.social.portal_auto
+        || player.social.raid_auto
+    {
         jobs.push(t("Guild sign-up"));
     }
-    if player.pet_info.auto_feed {
-        jobs.push(t("Pet feeding"));
+    if player.pet_info.auto_feed || player.pet_info.auto_arena {
+        jobs.push(t("Pets"));
     }
-    if player.idle_info.auto_upgrade {
+    if player.idle_info.auto_upgrade || player.idle_info.auto_sacrifice {
         jobs.push(t("Arena Manager"));
     }
     if player.guard_info.auto {
@@ -3904,14 +3904,23 @@ pub fn running_jobs(player: &AccountInfo) -> Vec<&'static str> {
     if player.tavern_info.wheel_auto {
         jobs.push(t("Wheel of fortune"));
     }
+    if player.tavern_info.dice_auto {
+        jobs.push(t("Dice"));
+    }
     if player.tavern_info.beer_auto {
         jobs.push(t("Beer"));
     }
-    if player.shop_info.auto {
+    if player.shop_info.auto
+        || player.shop_info.clear_backpack
+        || player.shop_info.equip_companions
+    {
         jobs.push(t("Shopping"));
     }
     if player.shop_info.attr_auto {
         jobs.push(t("Attributes"));
+    }
+    if player.dailies_info.auto {
+        jobs.push(t("Daily rewards"));
     }
 
     jobs

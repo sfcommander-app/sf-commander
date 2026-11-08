@@ -4444,7 +4444,7 @@ dependencies = [
 
 [[package]]
 name = "sf-commander"
-version = "6.2.15"
+version = "6.2.16"
 dependencies = [
  "ahash",
  "async-compression",

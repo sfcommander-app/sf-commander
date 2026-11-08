@@ -109,6 +109,8 @@ pub struct AutoFlags {
     pub fort_gems: bool,
     pub fort_build: bool,
     pub fort_recruit_all: bool,
+    #[serde(default)]
+    pub fort_gem_socket: bool,
     pub dungeon: bool,
     pub dungeon_portal: bool,
     pub expedition: bool,
@@ -134,6 +136,17 @@ pub struct AutoFlags {
     pub wheel: bool,
     pub dice: bool,
     pub shop: bool,
+    /// Housekeeping can run the shopping job even when gear buying is off,
+    /// so these flags belong to the handover too. Otherwise a Steam/Google
+    /// character silently turns them back on after every in-place update.
+    #[serde(default = "auto_flag_default_true")]
+    pub shop_clear_backpack: bool,
+    #[serde(default = "auto_flag_default_true")]
+    pub equip_companions: bool,
+    #[serde(default = "auto_flag_default_true")]
+    pub smith_auto: bool,
+    #[serde(default = "auto_flag_default_true")]
+    pub witch_auto: bool,
     pub attr: bool,
     pub dailies: bool,
     pub mount: bool,
@@ -144,6 +157,10 @@ pub struct AutoFlags {
     pub guild_raid: bool,
     #[serde(default)]
     pub guild_finder: bool,
+}
+
+fn auto_flag_default_true() -> bool {
+    true
 }
 
 impl AutoFlags {
@@ -164,6 +181,7 @@ impl AutoFlags {
             fort_gems: fi.is_some_and(|f| f.auto_gems),
             fort_build: fi.is_some_and(|f| f.auto_build),
             fort_recruit_all: fi.is_some_and(|f| f.recruit_all),
+            fort_gem_socket: fi.is_some_and(|f| f.gem_socket),
             dungeon: a.dungeon_info.auto,
             dungeon_portal: a.dungeon_info.portal_auto,
             expedition: a.expedition_info.auto,
@@ -182,6 +200,10 @@ impl AutoFlags {
             wheel: a.tavern_info.wheel_auto,
             dice: a.tavern_info.dice_auto,
             shop: a.shop_info.auto,
+            shop_clear_backpack: a.shop_info.clear_backpack,
+            equip_companions: a.shop_info.equip_companions,
+            smith_auto: a.shop_info.smith_auto,
+            witch_auto: a.shop_info.witch_auto,
             attr: a.shop_info.attr_auto,
             dailies: a.dailies_info.auto,
             mount: a.dailies_info.mount_auto,
@@ -210,6 +232,7 @@ impl AutoFlags {
             f.auto_gems = self.fort_gems;
             f.auto_build = self.fort_build;
             f.recruit_all = self.fort_recruit_all;
+            f.gem_socket = self.fort_gem_socket;
             f.auto_since = self.fort_attack.then(Local::now);
         }
         a.dungeon_info.auto = self.dungeon;
@@ -235,6 +258,10 @@ impl AutoFlags {
         a.tavern_info.wheel_auto = self.wheel;
         a.tavern_info.dice_auto = self.dice;
         a.shop_info.auto = self.shop;
+        a.shop_info.clear_backpack = self.shop_clear_backpack;
+        a.shop_info.equip_companions = self.equip_companions;
+        a.shop_info.smith_auto = self.smith_auto;
+        a.shop_info.witch_auto = self.witch_auto;
         a.shop_info.attr_auto = self.attr;
         a.dailies_info.auto = self.dailies;
         a.dailies_info.mount_auto = self.mount;
@@ -244,6 +271,51 @@ impl AutoFlags {
         a.social.raid_auto = self.guild_raid;
         a.social.finder_auto = self.guild_finder;
     }
+}
+
+/// Whether the character-level master switch really covers the complete
+/// safe unattended routine. Optional game areas count as satisfied until
+/// the character unlocks them; `sync_new_unlocks` then turns the newly
+/// available area on without requiring a page visit or another click.
+#[must_use]
+pub fn full_automation_enabled(player: &AccountInfo) -> bool {
+    player
+        .scrapbook_info
+        .as_ref()
+        .is_none_or(|a| a.auto_battle)
+        && player.dungeon_info.auto
+        && player.dungeon_info.portal_auto
+        && player.expedition_info.auto
+        && player.fortress_info.as_ref().is_none_or(|f| {
+            f.auto_attack
+                && f.auto_collect
+                && f.auto_gems
+                && f.auto_build
+                && f.recruit_all
+                && f.gem_socket
+        })
+        && player.underworld_info.as_ref().is_none_or(|u| {
+            u.auto_lure && u.auto_collect && u.auto_build
+        })
+        && player.pet_info.auto_feed
+        && player.pet_info.auto_arena
+        && player.idle_info.auto_upgrade
+        && player.idle_info.auto_sacrifice
+        && player.guard_info.auto
+        && player.tavern_info.beer_auto
+        && player.tavern_info.wheel_auto
+        && player.tavern_info.dice_auto
+        && player.shop_info.auto
+        && player.shop_info.attr_auto
+        && player.shop_info.clear_backpack
+        && player.shop_info.equip_companions
+        && player.shop_info.smith_auto
+        && player.shop_info.witch_auto
+        && player.dailies_info.auto
+        && player.dailies_info.mount_auto
+        && player.social.auto_attack
+        && player.social.auto_defense
+        && player.social.portal_auto
 }
 
 /// Another guild we looked at, boiled down to what a battle needs
@@ -341,23 +413,7 @@ impl Job {
     /// for the gear to be kept up on its own; the protections (epics, gems,
     /// enchanted, upgraded) hold by default. Disabled jobs are dropped by
     /// the queue itself, so this list is safe for everybody
-    pub const FULL_BOT_START: [Job; 15] = [
-        Job::FortressCollect,
-        Job::FortressAttack,
-        Job::Expedition,
-        Job::Arena,
-        Job::Dungeon,
-        Job::GuildSign,
-        Job::Pets,
-        Job::ArenaManager,
-        Job::Wheel,
-        Job::Dice,
-        Job::Shopping,
-        Job::Attributes,
-        Job::Lure,
-        Job::Underworld,
-        Job::Guard,
-    ];
+    pub const FULL_BOT_START: [Job; 16] = Self::DEFAULT_ORDER;
 
     /// Stable name for the config file
     pub fn key(self) -> &'static str {
@@ -2132,62 +2188,20 @@ pub struct AutoFortressChecker {
 /// Fires the periodic fortress housekeeping (collect / gems / buildings)
 pub struct FortressMaintainChecker {
     pub ident: AccountIdent,
-    pub player_status: Arc<Mutex<AccountStatus>>,
-    /// Visits a day the player asked for (3-10)
-    pub per_day: u8,
 }
 
 impl FortressMaintainChecker {
-    /// A few visits a day instead of one every three minutes (5.4): no
-    /// player sits at the fortress all day clicking it. The gap is the
-    /// day split into `per_day` parts, give or take a fifth - but it is cut
-    /// short for what will not wait: a store about to overflow, a building
-    /// or a gem search about to finish
+    /// Fortress production is deliberately checked every 15 minutes. Waiting
+    /// for a nearly full production store made short sessions miss most of
+    /// their XP and resources, while a much faster loop creates needless
+    /// requests. One maintenance pass drains the whole available backlog one
+    /// verified command at a time.
     pub async fn check(&self) -> Message {
-        let per_day = u64::from(self.per_day.clamp(3, 10));
-        let base = 24 * 3600 / per_day;
-        let mut secs = fastrand::u64(base * 4 / 5..=base * 6 / 5);
-        if let Some(due) = self.next_event_secs() {
-            secs = secs.min(due.max(120));
-        }
-        tokio::time::sleep(Duration::from_secs(secs)).await;
+        tokio::time::sleep(Duration::from_secs(15 * 60)).await;
         Message::Enqueue {
             ident: self.ident,
             job: Job::FortressCollect,
         }
-    }
-
-    /// Seconds until the first thing that will not wait: a store full, a
-    /// building or a gem search done. A minute of slack on each
-    fn next_event_secs(&self) -> Option<u64> {
-        let lock = self.player_status.lock_safe();
-        let (AccountStatus::Idle(_, gs) | AccountStatus::Busy(gs, _)) = &*lock
-        else {
-            return None;
-        };
-        let f = gs.fortress.as_ref()?;
-        let now = Local::now();
-        let until = |t: Option<DateTime<Local>>| {
-            t.and_then(|t| (t - now).to_std().ok())
-                .map(|d| d.as_secs() + 60)
-        };
-        let mut best: Option<u64> = None;
-        let mut take = |v: Option<u64>| {
-            if let Some(v) = v {
-                best = Some(best.map_or(v, |b| b.min(v)));
-            }
-        };
-        take(until(f.building_upgrade.finish));
-        take(until(f.gem_search.finish));
-        for (_, res) in &f.resources {
-            let per_hour = res.production.per_hour;
-            if per_hour == 0 || res.production.limit == 0 {
-                continue;
-            }
-            let room = res.production.limit.saturating_sub(res.current);
-            take(Some(room * 3600 / per_hour));
-        }
-        best
     }
 }
 
@@ -2575,6 +2589,39 @@ mod score_tests {
         // Two jobs with nothing on a clock: the one the player put first
         assert!(Job::Shopping.priority() < Job::Guard.priority());
         assert!(Job::Shopping.score(&g, 0) > Job::Guard.score(&g, 0));
+    }
+
+    #[test]
+    fn full_automation_initially_queues_every_scheduled_job() {
+        assert_eq!(Job::FULL_BOT_START, Job::DEFAULT_ORDER);
+        let unique: std::collections::HashSet<_> =
+            Job::FULL_BOT_START.into_iter().collect();
+        assert_eq!(unique.len(), Job::DEFAULT_ORDER.len());
+        assert!(unique.contains(&Job::Dailies));
+    }
+}
+
+#[cfg(test)]
+mod automation_handover_tests {
+    use super::AutoFlags;
+
+    #[test]
+    fn an_older_handover_keeps_the_previous_housekeeping_defaults() {
+        let mut value = serde_json::to_value(AutoFlags::default()).unwrap();
+        let map = value.as_object_mut().unwrap();
+        for key in [
+            "shop_clear_backpack",
+            "equip_companions",
+            "smith_auto",
+            "witch_auto",
+        ] {
+            map.remove(key);
+        }
+        let flags: AutoFlags = serde_json::from_value(value).unwrap();
+        assert!(flags.shop_clear_backpack);
+        assert!(flags.equip_companions);
+        assert!(flags.smith_auto);
+        assert!(flags.witch_auto);
     }
 }
 
