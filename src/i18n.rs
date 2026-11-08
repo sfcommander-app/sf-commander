@@ -70,6 +70,8 @@ const CS: &[(&str, &str)] = &[
     ("Nothing affordable right now", "Na další vylepšení zatím nestačí peníze"),
     ("next purchase in about", "další nákup asi za"),
     ("Tr/In/HoK", "P/I/R"),
+    ("Black gem chance", "Šance na černý drahokam"),
+    ("members at HoK", "členů s HoK"),
     ("Inactive first", "Neaktivní první"),
     ("At risk first", "Rizikoví první"),
     ("Contribution", "Přínos"),

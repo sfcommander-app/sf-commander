@@ -35,6 +35,25 @@ pub const OFFICER_SEATS: u8 = 9;
 /// which was an opinion dressed up as a limit
 pub const OFFICER_SEATS_MAX: u8 = 49;
 
+/// A member contributes one percentage point to the guild's Black Gem chance
+/// only after their own Hall of Knights reaches this level. Levels from
+/// different members must never be added together before applying the
+/// threshold: two members at HoK 8 still contribute zero, not one percent.
+pub const BLACK_GEM_HOK_LEVEL: u8 = 15;
+
+/// Guild-wide Black Gem chance in percentage points.
+///
+/// Hall of Knights is capped below a second threshold, so an eligible member
+/// contributes exactly one point. The return type deliberately stays a count:
+/// with at most fifty guild members, `23` means a 23% chance.
+#[must_use]
+pub fn black_gem_chance_percent(members: &[GuildMemberData]) -> usize {
+    members
+        .iter()
+        .filter(|member| member.knights >= BLACK_GEM_HOK_LEVEL)
+        .count()
+}
+
 /// What a member actually brings to the guild, on one 0-100 scale.
 ///
 /// The grade (1-5) answers "should this person stay"; this answers "who
@@ -939,6 +958,21 @@ mod contribution_tests {
             guild_rank: GuildRank::Member,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn black_gem_chance_applies_the_threshold_to_each_member() {
+        let members = vec![
+            member("eight-a", 8, 0),
+            member("eight-b", 8, 0),
+            member("fourteen", 14, 0),
+            member("fifteen", 15, 0),
+            member("twenty", 20, 0),
+        ];
+
+        // 8 + 8 + 14 is well above fifteen in total, but none of those
+        // members qualifies individually. Only HoK 15 and 20 add one point.
+        assert_eq!(black_gem_chance_percent(&members), 2);
     }
 
     /// Everything done, nothing missed: a full hundred. Nothing done at

@@ -1,5 +1,9 @@
 # Changelog
 
+## 6.2.12 — Guild Black Gem chance
+- Guild summary shows the Black Gem chance from eligible members
+- Each member contributes exactly 1% only when their own Hall of Knights is level 15 or higher; low member levels are never pooled together
+
 ## 6.2.11 — kalic-updates
 - Master Kill Switch starts active and gates every command that can change game state
 - Central write executor records started, blocked, verified failure, inconclusive and verified success outcomes

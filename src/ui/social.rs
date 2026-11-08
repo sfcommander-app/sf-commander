@@ -16,7 +16,9 @@ use sf_api::gamestate::guild::BattlesJoined;
 
 use crate::{
     guild_history::GuildHistory,
-    guild_report::{Verdict, member_stats},
+    guild_report::{
+        BLACK_GEM_HOK_LEVEL, Verdict, black_gem_chance_percent, member_stats,
+    },
     message::Message,
     player::{AccountInfo, AccountStatus, MemberSort},
     server::ServerInfo,
@@ -66,6 +68,18 @@ fn bonus_bar<'a>(
     pct: f32,
     detail: String,
 ) -> Element<'a, Message> {
+    metric_bar(label, pct, detail, pct_color(pct))
+}
+
+/// A labelled metric bar with an explicit value colour. Unlike guild-upgrade
+/// completion, a probability is not "bad" merely because it is below 40%, so
+/// the Black Gem value uses the normal accent colour.
+fn metric_bar<'a>(
+    label: &'a str,
+    pct: f32,
+    detail: String,
+    colour: Color,
+) -> Element<'a, Message> {
     row!(
         text(label).size(11).width(Length::FillPortion(7)),
         progress_bar(0.0..=100.0, pct)
@@ -73,7 +87,7 @@ fn bonus_bar<'a>(
             .width(Length::FillPortion(16)),
         text(format!("{pct:.0}%"))
             .size(11)
-            .style(theme::Text::Color(pct_color(pct)))
+            .style(theme::Text::Color(colour))
             .width(Length::FillPortion(3))
             .horizontal_alignment(Horizontal::Right),
         text(detail)
@@ -475,6 +489,7 @@ fn member_summary<'a>(
     let gold = bonus_progress(guild.total_treasure_skill, guild.finished_raids);
     let xp = bonus_progress(guild.total_instructor_skill, guild.finished_raids);
     let raids = guild.finished_raids.min(BONUS_RAIDS_MAX);
+    let black_gem_chance = black_gem_chance_percent(&guild.members);
     // The Hall of Knights is what the guild raids on, so the number that
     // matters is not "how many sit at whatever our best happens to be" -
     // a guild where everybody is at 4 would read 100 % - but how many
@@ -541,6 +556,15 @@ fn member_summary<'a>(
                 t("at"),
                 t("at the guild best")
             ),
+        ),
+        metric_bar(
+            t("Black gem chance"),
+            black_gem_chance as f32,
+            format!(
+                "{black_gem_chance}/{n} {} {BLACK_GEM_HOK_LEVEL}+",
+                t("members at HoK")
+            ),
+            crate::ui::style::ACCENT,
         ),
     )
     .spacing(2)
