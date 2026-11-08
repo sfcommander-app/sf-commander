@@ -1,5 +1,10 @@
 # Changelog
 
+## 6.2.15 — clean Windows upgrades
+- The Windows installer now runs the registered previous-version uninstaller before writing the new release
+- Silent upgrades preserve settings, saved login state, logs and guild history while removing old application binaries and registration
+- Windows package CI now performs a second installation and proves that old binaries are removed, user data survives and the upgraded executable starts
+
 ## 6.2.14 — Arena Manager large-number fix
 - All Arena Manager values now share one arbitrary-precision named formatter: money, owned/offered/target runes, remaining runes and every building upgrade price
 - The formatter covers named scales through vigintillion instead of stopping at quintillion and leaving another twelve digits in front of the unit

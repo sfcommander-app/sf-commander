@@ -1,6 +1,6 @@
 ﻿[package]
 name = "sf-commander"
-version = "6.2.14"
+version = "6.2.15"
 edition = "2024"
 
 # Two binaries. The app, and the author's licence desk - which is behind a

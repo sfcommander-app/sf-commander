@@ -81,6 +81,7 @@ VIAddVersionKey /LANG=${LANG_ENGLISH} "LegalCopyright" "MIT"
 
 Section "!$(SEC_APP)" SecApp
   SectionIn RO
+  Call UninstallPreviousRelease
   SetOutPath "$INSTDIR"
   File "/oname=SF-Commander-${VERSION}.exe" "${APP_EXE}"
   File "/oname=${LAUNCH}" "${LAUNCHER}"
@@ -106,6 +107,48 @@ SectionEnd
 Section "$(SEC_DESKTOP)" SecDesktop
   CreateShortcut "$DESKTOP\${LINK}" "$INSTDIR\${LAUNCH}" "" "$INSTDIR\${LAUNCH}" 0
 SectionEnd
+
+; A normal upgrade must not leave two registered/application copies behind.
+; Run the registered per-user uninstaller before writing this release. The
+; silent uninstaller deliberately answers "No" to the optional data wipe, so
+; helper.toml, saved login state, logs and guild history survive the upgrade.
+; If the old uninstaller cannot run, fail closed instead of layering a new
+; installation over a partially installed or locked previous release.
+Function UninstallPreviousRelease
+  ClearErrors
+  ReadRegStr $0 HKCU "${REGKEY}" "InstallLocation"
+  IfErrors done
+  StrCmp $0 "" done
+  IfFileExists "$0\Uninstall.exe" 0 done
+
+  ; Upgrades stay in the registered directory. This keeps the data that the
+  ; uninstaller preserves next to the executable attached to the new release,
+  ; even if a different directory was typed into the installer page.
+  StrCpy $INSTDIR $0
+
+  DetailPrint "Removing the previous S&F Commander application files..."
+  ClearErrors
+  ExecWait '"$0\Uninstall.exe" /S' $1
+  IfErrors uninstall_failed
+  StrCmp $1 "0" 0 uninstall_failed
+
+  ; NSIS Delete can silently leave a running executable locked on Windows.
+  ; Do not report a clean upgrade or install alongside it: ask the user to
+  ; close the old app and retry instead.
+  FindFirst $2 $3 "$0\SF-Commander-*.exe"
+  StrCmp $3 "" no_old_binary
+    FindClose $2
+    Goto uninstall_failed
+  no_old_binary:
+    FindClose $2
+    Goto done
+
+  uninstall_failed:
+    MessageBox MB_OK|MB_ICONSTOP "The previous S&F Commander version could not be uninstalled.$\r$\n$\r$\nClose the running application and try this installer again." /SD IDOK
+    Abort
+
+  done:
+FunctionEnd
 
 ; Installing over an older copy: drop the releases older than this one.
 ; Newer ones stay - the updater may already have fetched one, and the

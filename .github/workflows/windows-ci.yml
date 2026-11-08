@@ -68,6 +68,23 @@ jobs:
           $process = Start-Process -FilePath $app -ArgumentList '--smoke-test' -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Packaged smoke test exited $($process.ExitCode)" }
 
+          # Exercise the real upgrade path. A future-version sentinel would be
+          # retained by ordinary stale-release cleanup, so its removal proves
+          # that the registered previous uninstaller ran first.
+          $futureSentinel = Join-Path $root 'SF-Commander-99.0.0.exe'
+          Copy-Item -LiteralPath $app -Destination $futureSentinel
+          $dataMarker = Join-Path $root 'helper.toml'
+          Set-Content -LiteralPath $dataMarker -Value 'upgrade-preserves-user-data' -NoNewline
+
+          Start-Process -FilePath $installer -ArgumentList '/S', "/D=$root" -Wait
+          if (Test-Path -LiteralPath $futureSentinel) { throw 'Upgrade left an older installation binary behind.' }
+          if (-not (Test-Path -LiteralPath $app)) { throw "Upgraded app missing: $app" }
+          if ((Get-Content -LiteralPath $dataMarker -Raw) -ne 'upgrade-preserves-user-data') {
+            throw 'Upgrade removed or changed user data.'
+          }
+          $process = Start-Process -FilePath $app -ArgumentList '--smoke-test' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Upgraded package smoke test exited $($process.ExitCode)" }
+
       - name: Upload tagged or manually requested installer
         if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/kalic-updates'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
